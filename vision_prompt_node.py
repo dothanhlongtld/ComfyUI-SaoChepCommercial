@@ -97,32 +97,54 @@ class SaoChepVisionPrompt:
         }
 
         # Fixed quality & anatomy negative filters
-        # UNIVERSAL MASTER PRODUCTION PROMPT PROTOCOL (SCR_MASTER_V2_MORPHOLOGY_CANDIDATE)
-        positive_prompt = (
-            "A continuous video featuring the person from the reference image, with the actions, expressions, and timing of the driving performance. "
-            "The person retains the recognizable facial features, body proportions, skin tone, eye color, hairstyle, clothing, accessories, "
-            "and visible markings shown in the reference image. These appearance characteristics remain consistent throughout the video, "
-            "including during head turns, changes of expression, movement, and partial occlusion.\n\n"
-            "Facial movements are coherent with the performance. Eye direction, eyelid movement, and blinking are coordinated with the facial expression "
-            "and head motion. Hands move coherently with the actions and object interactions. Clothing retains its design, patterns, and colors "
-            "while folding and moving naturally.\n\n"
-            "The background, scene layout, camera movement, and framing follow the driving video. The reference person is integrated into that scene "
-            "with coherent illumination, contact shadows, depth, and foreground occlusion. Stable identity and temporally consistent appearance "
-            "throughout the sequence."
-        )
-        negative_prompt = (
-            "identity drift, appearance swapping, unintended changes in facial features, unintended changes in body proportions, "
-            "unintended hairstyle changes, unintended clothing changes, disappearing accessories, changing garment patterns, color flicker, "
-            "duplicated subject, extra limbs, fused limbs, extra fingers, fused fingers, warped face, distorted eye anatomy, unstable pupil position, "
-            "flickering eye highlights, texture crawling, temporal flicker, segmentation seams, artificial edge halos, background leakage through the subject, "
-            "detached body parts"
-        )
+        # UNIVERSAL MASTER PRODUCTION PROMPT PROTOCOL
+        if is_multi_character:
+            positive_prompt = (
+                "Two distinct human performers in full-body frame. Strictly preserve 100% of each character's exact facial "
+                "identity, hairstyle, masculine or feminine body proportions, and full-length original outfit from the reference photo. "
+                "Each identity remains permanently locked to its corresponding tracked performer across all path crossings. "
+                "Any unseen, occluded, or out-of-frame forearms, elbows, wrists, and ears must be rendered as 100% clean, "
+                "plain, unblemished bare skin with zero tattoos, zero ink, and zero earrings. "
+                "deep solid dark pupils, authentic dark brown irises, anatomically aligned eyes looking in unified direction, "
+                "natural relaxed gaze, anatomically correct eyelids following head tilt, soft shadows under brow bone, "
+                "subtle realistic eye moisture, authentic human gaze."
+            )
+            negative_prompt = (
+                "identity swap, clothes swapping between characters, shirtless torso, bare chest, shorts instead of long pants, "
+                "face merging, third person, background bystander, "
+                "(forearm tattoo, arm tattoo, elbow tattoo, wrist tattoo, body ink, skin markings:1.35), "
+                "(earrings, white teardrop earrings, hoop earrings, dangling earrings, ear piercing, extra jewelry:1.35), "
+                "female hourglass waist on male character, female cleavage on male character, glowing pupils, glowing eyes, white flash in eyes, pupil glare, "
+                "cloudy pupils, cataract, glassy eyes, light-colored pupils, white dot flare in iris, doll eyes, robotic stare, "
+                "wide-eyed stare, misaligned pupils, strabismus, divergent eyes, cross-eyed, bulging eyes, "
+                "(flyaway hair, frizzy wispy strands, stray hair fuzz:0.8), "
+                "(white hair outline, hair halo, glowing hair fringe, rim light on hair:1.2), "
+                "(cross-gender body transfer, altering biological sex of reference subject, gender swap, feminization of male subject, masculinization of female subject, driving dancer anatomical bleed:1.4), "
+                "gender swap, morphing clothing, extra limbs, deformed hands"
+            )
+        else:
+            positive_prompt = (
+                "A continuous single-performer video featuring the person from the reference image, with the actions, expressions, "
+                "and timing of the driving performance. The person retains the recognizable facial features, body proportions, "
+                "skin tone, eye color, hairstyle, clothing, and visible accessories shown in the reference image. "
+                "Any unseen forearms, elbows, wrists, and ears must be rendered as 100% clean, plain, unblemished bare skin "
+                "with zero tattoos, zero ink, and zero earrings. deep solid dark pupils, authentic dark brown irises, "
+                "anatomically aligned eyes looking in unified direction, authentic human gaze."
+            )
+            negative_prompt = (
+                "identity drift, appearance swapping, unintended changes in facial features, unintended changes in body proportions, "
+                "unintended hairstyle changes, unintended clothing changes, disappearing accessories, changing garment patterns, color flicker, "
+                "duplicated subject, extra limbs, fused limbs, extra fingers, fused fingers, warped face, distorted eye anatomy, unstable pupil position, "
+                "flickering eye highlights, texture crawling, temporal flicker, segmentation seams, artificial edge halos, background leakage through the subject, "
+                "detached body parts, glowing pupils, glowing eyes, white flash in eyes, pupil glare, cloudy pupils, cataract, glassy eyes, "
+                "(forearm tattoo, arm tattoo, elbow tattoo, wrist tattoo, body ink, skin markings:1.35), "
+                "(earrings, white teardrop earrings, hoop earrings, dangling earrings, ear piercing, extra jewelry:1.35), "
+                "(cross-gender body transfer, altering biological sex of reference subject, gender swap, feminization of male subject, masculinization of female subject, driving dancer anatomical bleed:1.4)"
+            )
 
         report_data.update({
-            "mode": "SCR_MASTER_V2_MORPHOLOGY_CANDIDATE",
-            "prompt_version": "SCR_MASTER_V2_MORPHOLOGY_CANDIDATE",
-            "positive_sha256": "8d4b65c4c8305e5cb876cc509223d9d79a31bf79ec2df78e5383cf293fac8d6a",
-            "negative_sha256": "482f7359be39a4fd19f05805ea85e96b2397c47ce81c15350a58cff3b1ad0d4b",
+            "mode": "MULTI_CHARACTER" if is_multi_character else "SINGLE_CHARACTER",
+            "prompt_version": "MASTER_PRODUCTION_V3",
             "is_multi_character": is_multi_character
         })
 

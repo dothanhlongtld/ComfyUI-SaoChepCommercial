@@ -13,10 +13,22 @@ Complies with Mandatory Rule 4 & Rule 5:
 
 import os
 import sys
+import shutil
 import random
 import datetime
 import subprocess
 from pathlib import Path
+
+def get_ffmpeg_binary():
+    bin_p = shutil.which("ffmpeg")
+    if bin_p:
+        return bin_p
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
+
 try:
     import folder_paths
 except ImportError:
@@ -46,11 +58,18 @@ DEVICE_FAMILIES = [
 ]
 
 def pick_device(brand_choice="AUTO_IPHONE"):
-    if brand_choice == "AUTO_IPHONE":
-        apple_fams = [f for f in DEVICE_FAMILIES if f["make"] == "Apple"]
-        family = random.choice(apple_fams)
-    elif "Galaxy" in brand_choice:
-        family = [f for f in DEVICE_FAMILIES if f["make"] == "Samsung"][0]
+    # Check if exact model was specified
+    for fam in DEVICE_FAMILIES:
+        for m in fam["models"]:
+            if brand_choice and (brand_choice.lower() == m.lower() or m.lower() in brand_choice.lower()):
+                return {
+                    "make": fam["make"],
+                    "model": m,
+                    "software": random.choice(fam["os_pool"])
+                }
+    if "Galaxy" in str(brand_choice):
+        samsung_fams = [f for f in DEVICE_FAMILIES if f["make"] == "Samsung"]
+        family = samsung_fams[0] if samsung_fams else DEVICE_FAMILIES[-1]
     else:
         apple_fams = [f for f in DEVICE_FAMILIES if f["make"] == "Apple"]
         family = random.choice(apple_fams)
@@ -105,7 +124,7 @@ class SaoChepCommercialExport:
                 "device_brand": (["AUTO_IPHONE", "iPhone 16 Pro Max", "iPhone 15 Pro Max", "Galaxy S25 Ultra"], {"default": "AUTO_IPHONE"}),
                 "iso_sensor_noise": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 5.0, "step": 0.1}),
                 "subvisual_sin_jitter": ("BOOLEAN", {"default": False}),
-                "audio_fingerprint_disrupt": ("BOOLEAN", {"default": True, "tooltip": "Bypass Content ID and copyright audio fingerprinting with sub-audible micro-pitch & phase shift"}),
+                "audio_fingerprint_disrupt": ("BOOLEAN", {"default": False, "tooltip": "Bypass Content ID and copyright audio fingerprinting with sub-audible micro-pitch & phase shift"}),
                 "audio_sample_rate": (["48000", "44100"], {"default": "48000"}),
                 "crf": ("INT", {"default": 18, "min": 10, "max": 30, "step": 1}),
                 "output_fps": ("INT", {"default": 30, "min": 0, "max": 60, "step": 1}),
@@ -116,7 +135,7 @@ class SaoChepCommercialExport:
         }
 
     def export_master(self, filenames, device_brand="AUTO_IPHONE", iso_sensor_noise=0.0,
-                      subvisual_sin_jitter=False, audio_fingerprint_disrupt=True,
+                      subvisual_sin_jitter=False, audio_fingerprint_disrupt=False,
                       audio_sample_rate="48000", crf=18,
                       output_fps=30, preset="medium", cleanup_intermediate=True,
                       filename_prefix="saochep/master"):
@@ -150,15 +169,21 @@ class SaoChepCommercialExport:
             target_dir = output_dir
 
         target_dir.mkdir(parents=True, exist_ok=True)
-        final_filename = f"{base_name}_{raw_video.stem}_master.mp4"
+
+        import uuid
+        job_tag = uuid.uuid4().hex[:12]
+        final_filename = f"{base_name}_{raw_video.stem}_{job_tag}_master.mp4"
         final_output_path = target_dir / final_filename
 
-        # If already exists, generate unique name
-        counter = 1
-        while final_output_path.exists():
-            final_filename = f"{base_name}_{raw_video.stem}_master_{counter:04d}.mp4"
-            final_output_path = target_dir / final_filename
-            counter += 1
+        # Safe output-root containment security check
+        try:
+            resolved_target = final_output_path.resolve()
+            resolved_root = output_dir.resolve()
+            if not resolved_target.is_relative_to(resolved_root):
+                raise ValueError(f"Security: Target path '{resolved_target}' traverses outside output directory '{resolved_root}'")
+        except AttributeError:
+            if not str(final_output_path.resolve()).startswith(str(output_dir.resolve())):
+                raise ValueError(f"Security: Target path '{final_output_path.resolve()}' traverses outside output directory '{output_dir.resolve()}'")
 
         print(f"[SaoChepCommercialExport] Processing Commercial Master...")
         print(f"  Input:  {raw_video}")
@@ -173,6 +198,8 @@ class SaoChepCommercialExport:
 
         # 2. Single-Pass Delivery FPS + Dynamic Sensor Noise Filter
         filters = []
+        # Causal VAE Frame 0 Artifact Purge: Drop noisy boundary frame 0 (Rule 28)
+        filters.append("select=gte(n\,1),setpts=PTS-STARTPTS")
         if output_fps and int(output_fps) > 0:
             filters.append(f"fps={int(output_fps)}:round=near")
         if iso_sensor_noise > 0.05:
@@ -203,8 +230,9 @@ class SaoChepCommercialExport:
         af_str = ",".join(af_filters)
 
         # 4. Execute Broadcast-Standard FFmpeg Command
+        ffmpeg_bin = get_ffmpeg_binary()
         ffmpeg_cmd = [
-            "ffmpeg", "-y",
+            ffmpeg_bin, "-y",
             "-i", str(raw_video),
             "-map", "0:v:0",
             "-map", "0:a:0?",
@@ -224,7 +252,13 @@ class SaoChepCommercialExport:
         ]
 
         print(f"[SaoChepCommercialExport] Running FFmpeg Naturalize Filter (Device: {device['model']}, FPS: {output_fps}, Preset: {preset}, Audio: {audio_sample_rate}Hz)...")
-        res = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, encoding="utf-8")
+        try:
+            res = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, encoding="utf-8", timeout=180)
+        except subprocess.TimeoutExpired as tex:
+            raise RuntimeError(f"[SaoChepCommercialExport ERROR] FFmpeg process timed out after 180s: {tex}")
+        except Exception as ex:
+            raise RuntimeError(f"[SaoChepCommercialExport ERROR] FFmpeg execution exception: {ex}")
+
         if res.returncode != 0 or not final_output_path.exists() or final_output_path.stat().st_size == 0:
             raise RuntimeError(
                 f"[SaoChepCommercialExport ERROR] FFmpeg failed (code {res.returncode}): {res.stderr[-600:]}"
@@ -257,3 +291,12 @@ class SaoChepCommercialExport:
             },
             "result": ((True, [str(final_output_path)]),)
         }
+
+
+NODE_CLASS_MAPPINGS = {
+    "SaoChepCommercialExport": SaoChepCommercialExport,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "SaoChepCommercialExport": "SaoChep Commercial Master Export (100% On-Flow Naturalize Master)",
+}

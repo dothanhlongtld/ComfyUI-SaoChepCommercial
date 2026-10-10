@@ -13,12 +13,24 @@ Changelog V3.2:
 
 import os
 import sys
+import shutil
 import json
 import time
 import math
 import subprocess
 import cv2
 import numpy as np
+
+def get_ffmpeg_binary():
+    bin_p = shutil.which("ffmpeg")
+    if bin_p:
+        return bin_p
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
+
 
 try:
     import torch
@@ -183,8 +195,9 @@ class AutoReferenceGrade:
             return frames_rgb_u8.copy(), 0.0, None
 
         b, h, w, c = frames_rgb_u8.shape
+        ffmpeg_bin = get_ffmpeg_binary()
         cmd = [
-            "ffmpeg", "-y",
+            ffmpeg_bin, "-y",
             "-f", "rawvideo", "-vcodec", "rawvideo",
             "-s", f"{w}x{h}", "-pix_fmt", "rgb24",
             "-r", "24", "-i", "pipe:0",
@@ -196,7 +209,12 @@ class AutoReferenceGrade:
         try:
             p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             raw_bytes = frames_rgb_u8.tobytes()
-            out_bytes, err = p.communicate(raw_bytes)
+            try:
+                out_bytes, err = p.communicate(raw_bytes, timeout=30)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                p.communicate()
+                return None, time.time() - t0, "FFmpeg pipe timed out after 30s"
             elapsed = time.time() - t0
             if p.returncode == 0 and len(out_bytes) == len(raw_bytes):
                 res = np.frombuffer(out_bytes, dtype=np.uint8).reshape((b, h, w, c))

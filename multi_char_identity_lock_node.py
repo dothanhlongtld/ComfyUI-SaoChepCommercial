@@ -59,11 +59,11 @@ class SaoChepMultiCharIdentityLock:
         for t in range(B):
             frame = mask_np[t]
 
-            # Detect Blue and Red masks
-            # Blue: high channel 2, low channel 0
-            # Red: high channel 0, low channel 2
-            blue_mask = (frame[:, :, 2] > 140) & (frame[:, :, 0] < 100)
-            red_mask = (frame[:, :, 0] > 140) & (frame[:, :, 2] < 100)
+            # Detect Blue and Red masks with channel dominance (handles slight compression/blending)
+            # Blue: channel 2 dominant over channel 0
+            # Red: channel 0 dominant over channel 2
+            blue_mask = (frame[:, :, 2] > frame[:, :, 0] + 30) & (frame[:, :, 2] > 80)
+            red_mask = (frame[:, :, 0] > frame[:, :, 2] + 30) & (frame[:, :, 0] > 80)
 
             # Compute centroids
             c_blue = np.array([np.mean(np.where(blue_mask)[1]), np.mean(np.where(blue_mask)[0])]) if np.any(blue_mask) else None
@@ -75,21 +75,20 @@ class SaoChepMultiCharIdentityLock:
                 prev_pos[1] = c_red
                 continue
 
-            if c_blue is not None and c_red is not None and prev_pos[0] is not None and prev_pos[1] is not None:
-                # Predict next positions using velocity
-                pred_0 = prev_pos[0] + prev_vel[0]
-                pred_1 = prev_pos[1] + prev_vel[1]
+            pred_0 = prev_pos[0] + prev_vel[0] if prev_pos[0] is not None else None
+            pred_1 = prev_pos[1] + prev_vel[1] if prev_pos[1] is not None else None
 
-                # Distance without swap: Blue is 0, Red is 1
-                dist_normal = np.linalg.norm(c_blue - pred_0) + np.linalg.norm(c_red - pred_1)
-                # Distance with swap: Blue is 1, Red is 0
-                dist_swapped = np.linalg.norm(c_blue - pred_1) + np.linalg.norm(c_red - pred_0)
+            if c_blue is not None and c_red is not None and pred_0 is not None and pred_1 is not None:
+                # Cost without swap: Blue is Track 0, Red is Track 1
+                cost_normal = np.linalg.norm(c_blue - pred_0) + np.linalg.norm(c_red - pred_1)
+                # Cost with swap: Red is Track 0, Blue is Track 1
+                cost_swapped = np.linalg.norm(c_red - pred_0) + np.linalg.norm(c_blue - pred_1)
 
-                # Check if identities jumped across
                 jump_0 = np.linalg.norm(c_blue - prev_pos[0])
                 jump_1 = np.linalg.norm(c_red - prev_pos[1])
 
-                is_swapped = (dist_swapped < dist_normal) and (jump_0 > max_allowed_jump_px or jump_1 > max_allowed_jump_px)
+                # Swap detected if inertial cost is decisively lower for swapped assignment OR sudden jump occurred
+                is_swapped = (cost_swapped + 6.0 < cost_normal) or ((jump_0 > max_allowed_jump_px or jump_1 > max_allowed_jump_px) and cost_swapped < cost_normal)
 
                 if is_swapped:
                     # SWAP DETECTED! Invert colors back to original identity
@@ -101,7 +100,7 @@ class SaoChepMultiCharIdentityLock:
                     new_frame[red_mask] = [0, 0, 255] # Make red pixels blue
                     out_masks[t] = new_frame
 
-                    # Update positions with swapped assignment
+                    # Update positions with swapped assignment (Track 0 was Red, Track 1 was Blue)
                     cur_pos_0 = c_red
                     cur_pos_1 = c_blue
                 else:
@@ -114,9 +113,9 @@ class SaoChepMultiCharIdentityLock:
                 prev_pos[0] = cur_pos_0
                 prev_pos[1] = cur_pos_1
 
-            elif c_blue is not None and prev_pos[0] is not None:
+            elif c_blue is not None and pred_0 is not None:
                 prev_pos[0] = c_blue
-            elif c_red is not None and prev_pos[1] is not None:
+            elif c_red is not None and pred_1 is not None:
                 prev_pos[1] = c_red
 
         out_tensor = torch.from_numpy(out_masks.astype(np.float32) / 255.0).to(device=device, dtype=dtype)

@@ -164,5 +164,15 @@ try:
 except Exception:
     pass
 
+try:
+    from .adaptive_scene_router_node import SaoChepAdaptiveSceneRouter, SaoChepAdaptiveTimelineMerger
+    NODE_CLASS_MAPPINGS["SaoChepAdaptiveSceneRouter"] = SaoChepAdaptiveSceneRouter
+    NODE_CLASS_MAPPINGS["SaoChepAdaptiveTimelineMerger"] = SaoChepAdaptiveTimelineMerger
+    NODE_DISPLAY_NAME_MAPPINGS["SaoChepAdaptiveSceneRouter"] = "SaoChep Adaptive Scene Router (100% On-Flow Node 2700)"
+    NODE_DISPLAY_NAME_MAPPINGS["SaoChepAdaptiveTimelineMerger"] = "SaoChep Adaptive Timeline Merger (100% On-Flow Node 2701)"
+except Exception:
+    pass
+
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+
 

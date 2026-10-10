@@ -3,17 +3,22 @@
 SaoChepSemanticObserver - VLM Semantic Observer Guardrail Node for ComfyUI
 Model: Qwen2.5-VL-3B-Instruct (loaded from Google Drive / Local Cache)
 
-ARCHITECTURAL PRINCIPLES (Strictly Enforced):
+ARCHITECTURAL PRINCIPLES (Strictly Enforced Master Production v3.0):
 1. VLM = Semantic Observer ONLY.
 2. Immutable Boundaries:
    - Strictly locked Actor Mapping (Actor A = Left, Actor B = Right).
    - Zero Mask or Geometry Modification.
    - Zero Garment Topology Alteration when confidence is ambiguous.
-   - Zero Accessory Fabrication (Only verified visible items: bags, straps, buckles).
+   - Zero Accessory Fabrication (Never invent bags, dresses, jewelry, tattoos, or hidden objects).
    - Zero Background Mutation (Background is locked by Composite Engine).
    - Zero Direct Prompt Overwrite (Must pass through Deterministic Prompt Compiler).
    - Zero Hallucinated Ink / Tattoos (Enforced 100% clean unblemished skin).
-3. Memory Lifecycle:
+3. Safe Fallback & Zero Hallucination Guarantee:
+   - If VLM inference fails, is offline, or missing dependencies:
+     -> FALLBACK TO CLEAN PASS-THROUGH (actors = []).
+     -> NEVER fabricate fake dresses, gowns, or outfits.
+     -> Relies 100% on CLIP-Vision (Node 76) and Universal Master Macro Prompt.
+4. Memory Lifecycle:
    - Run-Once-and-Offload: Model is evaluated once on Reference Image,
      then immediately unloaded from GPU VRAM to ensure Wan 2.1 has 100% free VRAM.
 """
@@ -35,14 +40,14 @@ except ImportError:
     HAS_COMFY_NODES = False
 
 
-# Default Candidate Paths on Google Drive and Local Systems
+# Candidate Paths on Google Drive and Local Systems
 DEFAULT_DRIVE_PATHS = [
     "/content/drive/MyDrive/models/vlm/Qwen2.5-VL-3B-Instruct",
     "/content/drive/MyDrive/ComfyUI/models/LLM/Qwen2.5-VL-3B-Instruct",
     "/content/drive/MyDrive/models/Qwen2.5-VL-3B-Instruct",
     "models/vlm/Qwen2.5-VL-3B-Instruct",
     "models/LLM/Qwen2.5-VL-3B-Instruct",
-    "Qwen/Qwen2.5-VL-3B-Instruct"  # HuggingFace Hub Fallback
+    "Qwen/Qwen2.5-VL-3B-Instruct"
 ]
 
 
@@ -103,8 +108,8 @@ class SaoChepSemanticObserver:
                 "reference_image": ("IMAGE", {"tooltip": "Reference character image [B, H, W, C]"}),
                 "is_multi_character": ("BOOLEAN", {"default": True, "tooltip": "True for 2 characters, False for single character"}),
                 "model_path": ("STRING", {
-                    "default": "/content/drive/MyDrive/models/vlm/Qwen2.5-VL-3B-Instruct",
-                    "tooltip": "Google Drive path or HuggingFace repo ID for Qwen2.5-VL-3B-Instruct"
+                    "default": "Qwen/Qwen2.5-VL-3B-Instruct",
+                    "tooltip": "HuggingFace repo ID, local path, or Google Drive path for Qwen2.5-VL-3B-Instruct"
                 }),
                 "load_device": (["auto", "cuda", "cpu"], {"default": "auto", "tooltip": "Inference device for VLM"}),
             },
@@ -131,20 +136,31 @@ class SaoChepSemanticObserver:
         for cand in DEFAULT_DRIVE_PATHS:
             if Path(cand).exists():
                 return str(Path(cand).resolve())
-        # Default to HuggingFace ID if local path doesn't exist
         return "Qwen/Qwen2.5-VL-3B-Instruct"
 
+    def get_fallback_profile(self) -> Dict[str, Any]:
+        """
+        Zero-Hallucination Fallback Profile:
+        When VLM is offline or unavailable, returns EMPTY actor list.
+        NEVER fabricates clothes, dresses, accessories, or hairstyles.
+        Passes through 100% to CLIP-Vision (Node 76) and Universal Macro Prompt.
+        """
+        return {
+            "actors": [],
+            "scene": {"background": "UNKNOWN"},
+            "_saochep_vlm_status": "OFFLINE_PASS_THROUGH"
+        }
+
     def run_vlm_inference(self, pil_image: Image.Image, model_path: str, device_choice: str, is_multi_character: bool) -> Dict[str, Any]:
-        """Execute Qwen2.5-VL inference and immediately offload memory."""
+        """Execute Qwen2.5-VL inference safely and immediately offload memory."""
         resolved_path = self.resolve_model_path(model_path)
-        print(f"[SaoChepSemanticObserver] Loading VLM from: {resolved_path}")
+        print(f"[SaoChepSemanticObserver] Initializing VLM from: {resolved_path}")
 
         try:
-            from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
-            from qwen_vl_utils import process_vision_info
+            from transformers import AutoProcessor, AutoModelForVision2Seq
         except ImportError as e:
-            print(f"[SaoChepSemanticObserver] Warning: transformers/qwen_vl_utils not installed: {e}")
-            raise RuntimeError("VLM_UNAVAILABLE: transformers/qwen_vl_utils missing; refusing semantic fabrication")
+            print(f"[SaoChepSemanticObserver] Warning: transformers not installed ({e}). Using Clean Fallback Pass-Through.")
+            return self.get_fallback_profile()
 
         target_device = "cuda" if (device_choice in ["auto", "cuda"] and torch.cuda.is_available()) else "cpu"
         torch_dtype = torch.bfloat16 if target_device == "cuda" else torch.float32
@@ -153,17 +169,18 @@ class SaoChepSemanticObserver:
         processor = None
         try:
             processor = AutoProcessor.from_pretrained(resolved_path, trust_remote_code=True)
-            model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            model = AutoModelForVision2Seq.from_pretrained(
                 resolved_path,
                 torch_dtype=torch_dtype,
                 device_map=target_device,
                 trust_remote_code=True
             )
 
+            sys_prompt = SYSTEM_OBSERVER_PROMPT_MULTI if is_multi_character else SYSTEM_OBSERVER_PROMPT_SINGLE
             messages = [
                 {
                     "role": "system",
-                    "content": (SYSTEM_OBSERVER_PROMPT_MULTI if is_multi_character else SYSTEM_OBSERVER_PROMPT_SINGLE)
+                    "content": sys_prompt
                 },
                 {
                     "role": "user",
@@ -174,15 +191,25 @@ class SaoChepSemanticObserver:
                 }
             ]
 
-            text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            image_inputs, video_inputs = process_vision_info(messages)
-            inputs = processor(
-                text=[text_prompt],
-                images=image_inputs,
-                videos=video_inputs,
-                padding=True,
-                return_tensors="pt"
-            ).to(target_device)
+            try:
+                from qwen_vl_utils import process_vision_info
+                text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                image_inputs, video_inputs = process_vision_info(messages)
+                inputs = processor(
+                    text=[text_prompt],
+                    images=image_inputs,
+                    videos=video_inputs,
+                    padding=True,
+                    return_tensors="pt"
+                ).to(target_device)
+            except Exception:
+                # Direct Transformers fallback without qwen_vl_utils
+                text_prompt = f"<|im_start|>system\n{sys_prompt}<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>Extract all character visual attributes into JSON according to the schema.<|im_end|>\n<|im_start|>assistant\n"
+                inputs = processor(
+                    text=[text_prompt],
+                    images=pil_image,
+                    return_tensors="pt"
+                ).to(target_device)
 
             with torch.no_grad():
                 generated_ids = model.generate(**inputs, max_new_tokens=256, temperature=0.1, do_sample=False)
@@ -193,20 +220,19 @@ class SaoChepSemanticObserver:
                     trimmed_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
                 )[0]
 
-            # Parse JSON from response
             match = re.search(r"\{.*\}", output_text, re.DOTALL)
             if match:
                 parsed_json = json.loads(match.group(0))
                 return parsed_json
             else:
-                raise RuntimeError("VLM_INVALID_RESPONSE: no JSON object returned")
+                print(f"[SaoChepSemanticObserver] VLM raw text did not contain JSON: {output_text[:100]}")
+                return self.get_fallback_profile()
 
         except Exception as exc:
-            print(f"[SaoChepSemanticObserver] Inference exception: {exc}")
-            raise RuntimeError(f"VLM_INFERENCE_FAILED: {exc}") from exc
+            print(f"[SaoChepSemanticObserver] VLM Inference notice: {exc}. Activating Clean Pass-Through.")
+            return self.get_fallback_profile()
 
         finally:
-            # RUN-ONCE AND OFFLOAD (Zero VRAM impact on Wan 2.1)
             if model is not None:
                 del model
             if processor is not None:
@@ -214,15 +240,7 @@ class SaoChepSemanticObserver:
             if target_device == "cuda":
                 torch.cuda.empty_cache()
             gc.collect()
-            print("[SaoChepSemanticObserver] VLM unloaded. VRAM restored 100%.")
-
-    def get_fallback_profile(self) -> Dict[str, Any]:
-        """Deprecated safety stub. Never fabricate character semantics on VLM failure."""
-        return {
-            "actors": [],
-            "scene": {"background": "UNKNOWN"},
-            "_saochep_vlm_status": "UNAVAILABLE"
-        }
+            print("[SaoChepSemanticObserver] VLM memory cleared (100% VRAM free for Wan 2.1).")
 
     def validate_and_compile(self, raw_facts: Dict[str, Any], is_multi: bool,
                              pos_suffix: str = "", neg_suffix: str = "") -> Tuple[str, str, str]:
@@ -247,13 +265,14 @@ class SaoChepSemanticObserver:
                 if not any(ban in item_str for ban in ["tattoo", "ink", "piercing", "earring"]):
                     clean_acc.append(item)
 
-            desc = f"Target {aid} wears {outfit} with {hair}."
-            if clean_acc:
-                acc_desc = ", and carries " + ", ".join(clean_acc)
-                desc = desc[:-1] + f"{acc_desc} attached throughout the performance."
-            actor_descs.append(desc)
+            if outfit or hair:
+                desc = f"Target {aid} wears {outfit} with {hair}."
+                if clean_acc:
+                    acc_desc = ", and carries " + ", ".join(clean_acc)
+                    desc = desc[:-1] + f"{acc_desc} attached throughout the performance."
+                actor_descs.append(desc)
 
-        micro_attributes = " ".join(actor_descs)
+        micro_attributes = " ".join(actor_descs).strip()
 
         # 2. Universal Master Production Prompt Protocol
         if is_multi:
@@ -277,7 +296,11 @@ class SaoChepSemanticObserver:
                 "anatomically aligned eyes looking in unified direction, authentic human gaze."
             )
 
-        compiled_positive = f"{base_macro} {micro_attributes}".strip()
+        if micro_attributes:
+            compiled_positive = f"{base_macro} {micro_attributes}".strip()
+        else:
+            compiled_positive = base_macro.strip()
+
         if pos_suffix.strip():
             compiled_positive += f" {pos_suffix.strip()}"
 
@@ -286,20 +309,22 @@ class SaoChepSemanticObserver:
             "face merging, third person, background bystander, "
             "(forearm tattoo, arm tattoo, elbow tattoo, wrist tattoo, body ink, skin markings:1.35), "
             "(earrings, white teardrop earrings, hoop earrings, dangling earrings, ear piercing, extra jewelry:1.35), "
-            "female hourglass waist on male character, glowing pupils, glowing eyes, white flash in eyes, pupil glare, "
+            "female hourglass waist on male character, female cleavage on male character, glowing pupils, glowing eyes, white flash in eyes, pupil glare, "
             "cloudy pupils, cataract, glassy eyes, light-colored pupils, white dot flare in iris, doll eyes, robotic stare, "
             "wide-eyed stare, misaligned pupils, strabismus, divergent eyes, cross-eyed, bulging eyes, "
             "(flyaway hair, frizzy wispy strands, stray hair fuzz:0.8), "
             "(white hair outline, hair halo, glowing hair fringe, rim light on hair:1.2), "
+            "(cross-gender body transfer, altering biological sex of reference subject, gender swap, feminization of male subject, masculinization of female subject, driving dancer anatomical bleed:1.4), "
             "gender swap, morphing clothing, extra limbs, deformed hands"
         )
         if neg_suffix.strip():
             compiled_negative = f"{neg_suffix.strip()}, {compiled_negative}"
 
         # JSON Analysis Report
+        status = "VALIDATED" if micro_attributes else "CLEAN_PASS_THROUGH"
         report = {
             "vlm_model": "Qwen2.5-VL-3B-Instruct",
-            "observer_status": "VALIDATED",
+            "observer_status": status,
             "extracted_facts": raw_facts,
             "compiled_micro_attributes": micro_attributes,
             "token_budget_guard": "PASSED (< 235 subwords)"
@@ -321,7 +346,7 @@ class SaoChepSemanticObserver:
             img_np = np.asarray(img_tensor, dtype=np.uint8)
         pil_img = Image.fromarray(img_np)
 
-        # 2. VLM Inference (Run-Once & Offload)
+        # 2. VLM Inference (Run-Once & Offload with Clean Fallback)
         raw_facts = self.run_vlm_inference(pil_img, model_path, load_device, is_multi_character)
 
         # 3. Validation & Deterministic Prompt Compiler
@@ -341,3 +366,12 @@ class SaoChepSemanticObserver:
                 pass
 
         return (pos_prompt, neg_prompt, report_json, pos_cond, neg_cond)
+
+
+NODE_CLASS_MAPPINGS = {
+    "SaoChepSemanticObserver": SaoChepSemanticObserver,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "SaoChepSemanticObserver": "SaoChep Semantic Observer (VLM Guardrail Node 9009)",
+}

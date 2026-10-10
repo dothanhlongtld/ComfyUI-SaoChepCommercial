@@ -76,3 +76,12 @@ class SaoChepOcularSteering:
 
         report = "OCULAR_STEERING_INJECTED: Universal Anti-Glare & Unified Gaze Active"
         return (final_pos, final_neg, report)
+
+
+NODE_CLASS_MAPPINGS = {
+    "SaoChepOcularSteering": SaoChepOcularSteering,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "SaoChepOcularSteering": "SaoChep Ocular Steering & Anti-Glare (On-Flow Gaze Lock Node 9020)",
+}
