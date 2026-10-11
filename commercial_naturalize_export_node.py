@@ -198,8 +198,7 @@ class SaoChepCommercialExport:
 
         # 2. Single-Pass Delivery FPS + Dynamic Sensor Noise Filter
         filters = []
-        # Causal VAE Frame 0 Artifact Purge: Drop noisy boundary frame 0 (Rule 28)
-        filters.append("select=gte(n\,1),setpts=PTS-STARTPTS")
+        # Preserve full timeline and audio alignment (240 -> 240 frames preserved)
         if output_fps and int(output_fps) > 0:
             filters.append(f"fps={int(output_fps)}:round=near")
         if iso_sensor_noise > 0.05:

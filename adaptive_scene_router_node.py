@@ -297,6 +297,9 @@ class SaoChepAdaptiveTimelineMerger:
 
         rendered_actor_images = rendered_actor_images.to(merged.device)
 
+        # Keep a copy of the spatial-matched (resized) originals for crossfading
+        resized_originals = merged.clone()
+
         # Place rendered actor frames into exact indices
         num_to_place = min(len(actor_indices), rendered_count)
         for i in range(num_to_place):
@@ -316,10 +319,10 @@ class SaoChepAdaptiveTimelineMerger:
                             alpha = (b_i + 1) / float(blend_frames + 1)
                             idx = st_f + b_i
                             if idx < merged.shape[0]:
-                                # blend native with rendered
+                                # blend resized original with rendered
                                 rend_idx = actor_indices.index(idx) if idx in actor_indices else -1
                                 if rend_idx >= 0 and rend_idx < rendered_count:
-                                    merged[idx] = (1.0 - alpha) * original_images[idx].to(merged.device) + alpha * rendered_actor_images[rend_idx]
+                                    merged[idx] = (1.0 - alpha) * resized_originals[idx] + alpha * rendered_actor_images[rend_idx]
 
                     # Blend at end of actor shot (if not last frame)
                     if end_f < total_orig and (end_f - blend_frames) >= 0:
@@ -329,7 +332,7 @@ class SaoChepAdaptiveTimelineMerger:
                             if idx >= 0 and idx < merged.shape[0]:
                                 rend_idx = actor_indices.index(idx) if idx in actor_indices else -1
                                 if rend_idx >= 0 and rend_idx < rendered_count:
-                                    merged[idx] = (1.0 - alpha) * original_images[idx].to(merged.device) + alpha * rendered_actor_images[rend_idx]
+                                    merged[idx] = (1.0 - alpha) * resized_originals[idx] + alpha * rendered_actor_images[rend_idx]
 
         report = (
             f"[ON-FLOW TIMELINE MERGER] Successfully merged {num_to_place} rendered AI frames "
