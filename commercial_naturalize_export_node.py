@@ -3,12 +3,10 @@
 SaoChepCommercialExport - ComfyUI Custom Node
 100% On-Flow Commercial Master Video Export & Naturalize Filter
 
-Complies with Mandatory Rule 4 & Rule 5:
-1. Device Spoofing: Generates authentic QuickTime EXIF metadata (Apple iPhone 15/16/17 Pro Max, iOS).
-2. Sensor Noise: Dynamic ISO 400 noise jitter (c0s=1.8:c1s=1.0:c2s=1.0:allf=t+u) to break plastic AI smoothness.
-3. Sub-visual Sin Wave Jitter: Modulates frame brightness with a dual-harmonic sine wave to bypass AI copyright detection.
-4. Audio Normalization: Resamples audio to broadcast standard 48kHz stereo AAC 128k.
-5. AI Footprint Eradication: Strips all Lavf/Lavc/Google/C2PA/SynthID tags with -fflags +bitexact.
+Optional synthetic device metadata, sensor noise, sine brightness jitter and audio alteration.
+Source metadata/chapter stripping and bitexact flags remain enabled independently of
+synthetic device metadata. Encoder/container tags may still be present; these effects
+do not guarantee AI-label or copyright-matching bypass, or authentic device provenance.
 """
 
 import os
@@ -58,6 +56,11 @@ DEVICE_FAMILIES = [
 ]
 
 def pick_device(brand_choice="AUTO_IPHONE"):
+    # Fixed explicit profile; keep DEVICE_FAMILIES unchanged for legacy AUTO_IPHONE.
+    # Apple confirms iPhone 17 features iOS 26:
+    # https://www.apple.com/newsroom/2025/09/apple-debuts-iphone-17/
+    if isinstance(brand_choice, str) and brand_choice.lower() == "iphone 17":
+        return {"make": "Apple", "model": "iPhone 17", "software": "26.0"}
     # Check if exact model was specified
     for fam in DEVICE_FAMILIES:
         for m in fam["models"]:
@@ -121,16 +124,17 @@ class SaoChepCommercialExport:
                 "filenames": ("VHS_FILENAMES",),
             },
             "optional": {
-                "device_brand": (["AUTO_IPHONE", "iPhone 16 Pro Max", "iPhone 15 Pro Max", "Galaxy S25 Ultra"], {"default": "AUTO_IPHONE"}),
+                "device_brand": (["AUTO_IPHONE", "iPhone 16 Pro Max", "iPhone 15 Pro Max", "Galaxy S25 Ultra", "iPhone 17"], {"default": "AUTO_IPHONE"}),
                 "iso_sensor_noise": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 5.0, "step": 0.1}),
                 "subvisual_sin_jitter": ("BOOLEAN", {"default": False}),
-                "audio_fingerprint_disrupt": ("BOOLEAN", {"default": False, "tooltip": "Bypass Content ID and copyright audio fingerprinting with sub-audible micro-pitch & phase shift"}),
+                "audio_fingerprint_disrupt": ("BOOLEAN", {"default": False, "tooltip": "Apply micro-pitch and stereo/equalizer alterations; no guarantee of avoiding audio matching"}),
                 "audio_sample_rate": (["48000", "44100"], {"default": "48000"}),
                 "crf": ("INT", {"default": 18, "min": 10, "max": 30, "step": 1}),
                 "output_fps": ("INT", {"default": 30, "min": 0, "max": 60, "step": 1}),
                 "preset": (["slow", "medium", "fast", "veryfast"], {"default": "medium"}),
                 "cleanup_intermediate": ("BOOLEAN", {"default": True}),
                 "filename_prefix": ("STRING", {"default": "saochep/master"}),
+                "device_profile_enabled": ("BOOLEAN", {"default": True, "tooltip": "Inject synthetic device metadata; source metadata/chapter stripping remains enabled when off"}),
             }
         }
 
@@ -138,7 +142,7 @@ class SaoChepCommercialExport:
                       subvisual_sin_jitter=False, audio_fingerprint_disrupt=False,
                       audio_sample_rate="48000", crf=18,
                       output_fps=30, preset="medium", cleanup_intermediate=True,
-                      filename_prefix="saochep/master"):
+                      filename_prefix="saochep/master", device_profile_enabled=True):
         
         raw_video_path = find_mp4_path(filenames)
         if not raw_video_path:
@@ -189,12 +193,21 @@ class SaoChepCommercialExport:
         print(f"  Input:  {raw_video}")
         print(f"  Output: {final_output_path}")
 
-        # 1. Device Spoofing
-        device = pick_device(device_brand)
-        delta_days = random.randint(1, 7)
-        delta_seconds = random.randint(0, 86400)
-        fake_time = datetime.datetime.now() - datetime.timedelta(days=delta_days, seconds=delta_seconds)
-        fake_time_str = fake_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # 1. Optional synthetic device metadata (not proof of device provenance)
+        device = None
+        device_metadata = []
+        if device_profile_enabled:
+            device = pick_device(device_brand)
+            delta_days = random.randint(1, 7)
+            delta_seconds = random.randint(0, 86400)
+            fake_time = datetime.datetime.now() - datetime.timedelta(days=delta_days, seconds=delta_seconds)
+            fake_time_str = fake_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+            device_metadata = [
+                "-metadata", f"make={device['make']}",
+                "-metadata", f"model={device['model']}",
+                "-metadata", f"encoder={device['software']}",
+                "-metadata", f"creation_time={fake_time_str}",
+            ]
 
         # 2. Single-Pass Delivery FPS + Dynamic Sensor Noise Filter
         filters = []
@@ -242,15 +255,13 @@ class SaoChepCommercialExport:
             "-c:a", "aac", "-b:a", "128k",
             "-map_metadata", "-1", "-map_chapters", "-1",
             "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact",
-            "-metadata", f"make={device['make']}",
-            "-metadata", f"model={device['model']}",
-            "-metadata", f"encoder={device['software']}",
-            "-metadata", f"creation_time={fake_time_str}",
+            *device_metadata,
             "-movflags", "+faststart",
             str(final_output_path)
         ]
 
-        print(f"[SaoChepCommercialExport] Running FFmpeg Naturalize Filter (Device: {device['model']}, FPS: {output_fps}, Preset: {preset}, Audio: {audio_sample_rate}Hz)...")
+        device_label = device['model'] if device is not None else "disabled"
+        print(f"[SaoChepCommercialExport] Running FFmpeg Naturalize Filter (Device: {device_label}, FPS: {output_fps}, Preset: {preset}, Audio: {audio_sample_rate}Hz)...")
         try:
             res = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, encoding="utf-8", timeout=180)
         except subprocess.TimeoutExpired as tex:
