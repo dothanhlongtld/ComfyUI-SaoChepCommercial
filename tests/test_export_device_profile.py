@@ -59,7 +59,7 @@ class ExportDeviceProfileTests(unittest.TestCase):
         for flag, value in (
             ("-map_metadata", "-1"), ("-map_chapters", "-1"),
             ("-fflags", "+bitexact"), ("-flags:v", "+bitexact"),
-            ("-flags:a", "+bitexact"), ("-movflags", "+faststart"),
+            ("-flags:a", "+bitexact"),
             ("-c:v", "libx264"), ("-pix_fmt", "yuv420p"),
             ("-c:a", "aac"), ("-b:a", "128k"),
         ):
@@ -70,6 +70,13 @@ class ExportDeviceProfileTests(unittest.TestCase):
         )
         for flag in ("-r", "-shortest", "-t", "-frames:v"):
             self.assertNotIn(flag, command)
+
+    def assert_metadata_muxing(self, command, enabled):
+        self.assertEqual(command.count("-movflags"), 1)
+        self.assertEqual(command[command.index("-movflags") + 1],
+                         "+faststart+use_metadata_tags" if enabled else "+faststart")
+        self.assertNotIn("-bitexact", command)  # keep the existing scoped flags
+        self.assertFalse(any(value.startswith("encoder=") for value in metadata(command)))
 
     def test_optional_schema_defaults_and_positional_compatibility(self):
         inputs = export.SaoChepCommercialExport.INPUT_TYPES()["optional"]
@@ -91,6 +98,7 @@ class ExportDeviceProfileTests(unittest.TestCase):
         )
         command = self.run.call_args.args[0]
         self.assertIn("model=iPhone 15 Pro Max", metadata(command))
+        self.assert_metadata_muxing(command, True)
         self.assertEqual(command[command.index("-vf") + 1], "fps=24:round=near")
         self.assertEqual(command[command.index("-crf") + 1], "20")
         self.assertEqual(command[command.index("-preset") + 1], "fast")
@@ -102,6 +110,7 @@ class ExportDeviceProfileTests(unittest.TestCase):
         with patch.object(export, "pick_device", side_effect=AssertionError("must not pick device")):
             command, _ = self.invoke(device_profile_enabled=False, device_brand="iPhone 17")
         self.assertEqual(metadata(command), [])
+        self.assert_metadata_muxing(command, False)
         self.choice.assert_not_called()
         self.assert_privacy_and_encoding(command)
         self.assertEqual(command[command.index("-vf") + 1], "fps=30:round=near")
@@ -110,11 +119,12 @@ class ExportDeviceProfileTests(unittest.TestCase):
     def test_true_injects_fixed_iphone17_and_time_with_privacy_flags(self):
         command, _ = self.invoke(device_profile_enabled=True, device_brand="iPhone 17")
         self.assertEqual(metadata(command), [
-            "make=Apple", "model=iPhone 17", "encoder=26.0",
+            "make=Apple", "model=iPhone 17", "software=26.0",
             "creation_time=2026-03-08T11:00:00Z",
         ])
         self.choice.assert_not_called()
         self.assert_privacy_and_encoding(command)
+        self.assert_metadata_muxing(command, True)
 
     def test_fixed_profile_is_case_insensitive_and_never_samples(self):
         for choice in ("iPhone 17", "IPHONE 17"):
@@ -126,8 +136,10 @@ class ExportDeviceProfileTests(unittest.TestCase):
     def test_omitted_flag_keeps_legacy_auto_pool_and_injection(self):
         command, _ = self.invoke()
         self.assertEqual(metadata(command)[:3], [
-            "make=Apple", "model=iPhone 16 Pro Max", "encoder=18.0",
+            "make=Apple", "model=iPhone 16 Pro Max", "software=18.0",
         ])
+        self.assert_privacy_and_encoding(command)
+        self.assert_metadata_muxing(command, True)
         apple_pool = self.choice.call_args_list[0].args[0]
         self.assertEqual([family["models"] for family in apple_pool], [
             ["iPhone 16 Pro Max", "iPhone 16 Pro", "iPhone 16 Plus", "iPhone 16"],
@@ -153,9 +165,10 @@ class ExportDeviceProfileTests(unittest.TestCase):
                 self.choice.reset_mock()
                 command, _ = self.invoke(device_brand=model)
                 self.assertEqual(metadata(command)[:3], [
-                    f"make={make}", f"model={model}", f"encoder={software}",
+                    f"make={make}", f"model={model}", f"software={software}",
                 ])
                 self.assertEqual(self.choice.call_count, 1)
+                self.assert_metadata_muxing(command, True)
 
     def test_effects_are_independent_of_metadata_toggle(self):
         commands = []
@@ -174,8 +187,12 @@ class ExportDeviceProfileTests(unittest.TestCase):
                 self.assertEqual(command[command.index("-af") + 1],
                     "aresample=48000,asetrate=48000*1.006,atempo=1/1.006,extrastereo=m=1.03,"
                     "equalizer=f=1200:t=q:w=1.5:g=0.5,equalizer=f=3400:t=q:w=1.2:g=-0.4")
+                self.assert_privacy_and_encoding(command)
+                self.assert_metadata_muxing(command, enabled)
+                # Only device tags and their muxer storage mode may differ.
                 commands.append([arg for i, arg in enumerate(command)
-                                 if arg != "-metadata" and (i == 0 or command[i - 1] != "-metadata")])
+                                 if arg not in ("-metadata", "-movflags") and
+                                 (i == 0 or command[i - 1] not in ("-metadata", "-movflags"))])
         self.assertEqual(commands[0], commands[1])
 
     def test_disabled_effects_keep_configured_resampling_and_native_fps(self):

@@ -205,7 +205,8 @@ class SaoChepCommercialExport:
             device_metadata = [
                 "-metadata", f"make={device['make']}",
                 "-metadata", f"model={device['model']}",
-                "-metadata", f"encoder={device['software']}",
+                # FFmpeg's bitexact muxer initialization deletes the reserved encoder key.
+                "-metadata", f"software={device['software']}",
                 "-metadata", f"creation_time={fake_time_str}",
             ]
 
@@ -256,7 +257,8 @@ class SaoChepCommercialExport:
             "-map_metadata", "-1", "-map_chapters", "-1",
             "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact",
             *device_metadata,
-            "-movflags", "+faststart",
+            # mdta persists arbitrary device keys; source metadata is still stripped above.
+            "-movflags", "+faststart+use_metadata_tags" if device_profile_enabled else "+faststart",
             str(final_output_path)
         ]
 

@@ -21,9 +21,19 @@ The deployment uses ComfyUI's existing torch, numpy, Pillow and OpenCV; do not b
 
 `SaoChepCommercialExport` adds optional BOOLEAN `device_profile_enabled` (default
 `True`, including when omitted). Set it to `False` to skip synthetic make/model,
-software-as-encoder and fabricated creation-time injection. Source metadata and
-chapter stripping, bitexact flags, encoding, FPS and normalization remain enabled;
-this does not guarantee the absence of all encoder/container tags.
+`software` and fabricated creation-time injection. When enabled, MP4 uses
+`-movflags +faststart+use_metadata_tags` to persist make/model/software as mdta
+metadata. Software uses the explicit `software` key, not `encoder`: FFmpeg's
+bitexact muxer initialization deletes that reserved key. When disabled, movflags
+remain `+faststart` only. Source metadata and chapter stripping, bitexact flags,
+encoding, FPS and normalization remain enabled; this does not guarantee the
+absence of all encoder/container tags.
+
+See [FFmpeg's MOV/MP4 muxer options](https://ffmpeg.org/ffmpeg-formats.html#MOV_002fMPEG_002d4_002fISOMBFF-muxers)
+and [bitexact muxer initialization (9.0.1)](https://github.com/FFmpeg/FFmpeg/blob/n9.0.1/libavformat/mux.c).
+Metadata readers may differ in mdta support. FFprobe 9 may report the same
+fabricated `creation_time` twice (header and mdta, separated by `;`); both
+represent the same instant.
 
 `device_brand` adds explicit `iPhone 17`: fixed make `Apple`, model `iPhone 17`,
 software `26.0` (iOS 26). [Apple's iPhone 17 announcement](https://www.apple.com/newsroom/2025/09/apple-debuts-iphone-17/)
