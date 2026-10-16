@@ -200,30 +200,27 @@ class SaoChepAdaptiveClarityEnhancer:
         return images
 
     def process(self, images, adaptive_mode=True, blend_opacity=0.31, sharpen_strength=1.0, clarity_strength=0.4):
-        # 0. Enforce CUDA GPU acceleration for 100x speedup (0.2s vs 124s on CPU)
         orig_device = images.device
         calc_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        images = images.to(calc_device)
 
-        # Suppress VAE temporal boundary shifts (Head 0-2s, Boundary 1-3, Tail)
+        # Keep temporal operations global while using one CPU working/output buffer.
         images = self._temporal_boundary_smooth(images)
-        images = self._temporal_head_stabilize(images)
-        images = self._temporal_color_stabilize(images)
+        out = torch.empty(images.shape, dtype=images.dtype, device="cpu")
+        out.copy_(images)
+        self._temporal_head_stabilize(out)
+        self._temporal_color_stabilize(out)
 
-        B = images.shape[0]
         tone_lut = self.build_tone_lut_tensor(calc_device)
+        for start in range(0, out.shape[0], 32):
+            end = min(start + 32, out.shape[0])
+            sub = out[start:end].to(calc_device)
+            processed = self._process_chunk(
+                sub, tone_lut, adaptive_mode, blend_opacity,
+                sharpen_strength, clarity_strength,
+            )
+            out[start:end].copy_(processed.to("cpu"))
+            del sub, processed
 
-        # Chunk processing to safeguard VRAM on long sequences (1,000-case standard)
-        chunk_size = 32
-        if B > chunk_size:
-            out_chunks = []
-            for i in range(0, B, chunk_size):
-                sub = images[i : i + chunk_size]
-                out_chunks.append(self._process_chunk(sub, tone_lut, adaptive_mode, blend_opacity, sharpen_strength, clarity_strength))
-            out = torch.cat(out_chunks, dim=0)
-        else:
-            out = self._process_chunk(images, tone_lut, adaptive_mode, blend_opacity, sharpen_strength, clarity_strength)
-        
         return (out.to(orig_device),)
 
 
