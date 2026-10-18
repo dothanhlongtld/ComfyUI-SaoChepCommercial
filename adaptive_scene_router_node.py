@@ -244,6 +244,33 @@ class SaoChepAdaptiveSceneRouter:
         return (actor_tensor, routing_data, report)
 
 
+def _contain_geometry(source_width, source_height, target_width, target_height):
+    """Return resized dimensions and centered padding for a contain fit."""
+    if min(source_width, source_height, target_width, target_height) <= 0:
+        raise ValueError("image and target dimensions must be positive")
+    scale = min(target_width / source_width, target_height / source_height)
+    resized_width = max(1, round(source_width * scale))
+    resized_height = max(1, round(source_height * scale))
+    left = (target_width - resized_width) // 2
+    top = (target_height - resized_height) // 2
+    return resized_width, resized_height, left, top
+
+
+def _contain_pad_frame(frame, target_width, target_height):
+    h, w = frame.shape[:2]
+    resized_width, resized_height, left, top = _contain_geometry(w, h, target_width, target_height)
+    resized = cv2.resize(frame, (resized_width, resized_height), interpolation=cv2.INTER_LANCZOS4)
+    return cv2.copyMakeBorder(
+        resized,
+        top,
+        target_height - resized_height - top,
+        left,
+        target_width - resized_width - left,
+        cv2.BORDER_CONSTANT,
+        value=(0, 0, 0),
+    )
+
+
 class SaoChepAdaptiveTimelineMerger:
     CATEGORY = "SaoChep/Commercial"
     FUNCTION = "merge_timeline"
@@ -276,22 +303,25 @@ class SaoChepAdaptiveTimelineMerger:
             return (rendered_actor_images, report)
 
         actor_indices = data.get("actor_indices", [])
-        if len(actor_indices) == 0:
-            return (original_images, "[ON-FLOW TIMELINE MERGER] Empty actor indices, passthrough original.")
-
-        # Ensure spatial resolution matches
+        # Match the actor delivery canvas without stretching native B-roll.
         h_orig, w_orig = original_images.shape[1], original_images.shape[2]
         h_rend, w_rend = rendered_actor_images.shape[1], rendered_actor_images.shape[2]
 
-        if (h_orig, w_orig) != (h_rend, w_rend):
-            # Upscale original to match rendered output resolution
-            rendered_actor_images = rendered_actor_images.to(original_images.device)
-            orig_resized = []
+        def fit_originals():
+            frames = []
             for fr in original_images:
                 fr_np = (fr.detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
-                fr_res = cv2.resize(fr_np, (w_rend, h_rend), interpolation=cv2.INTER_LANCZOS4)
-                orig_resized.append(torch.from_numpy(fr_res).float() / 255.0)
-            merged = torch.stack(orig_resized).to(original_images.device)
+                fr_fit = _contain_pad_frame(fr_np, w_rend, h_rend)
+                frames.append(torch.from_numpy(fr_fit).float() / 255.0)
+            return torch.stack(frames).to(original_images.device)
+
+        if len(actor_indices) == 0:
+            originals = original_images if (h_orig, w_orig) == (h_rend, w_rend) else fit_originals()
+            return (originals, "[ON-FLOW TIMELINE MERGER] Empty actor indices, original fitted to delivery canvas.")
+
+        if (h_orig, w_orig) != (h_rend, w_rend):
+            rendered_actor_images = rendered_actor_images.to(original_images.device)
+            merged = fit_originals()
         else:
             merged = original_images.clone()
 

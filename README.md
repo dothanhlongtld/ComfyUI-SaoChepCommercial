@@ -3,6 +3,7 @@
 Based on the user-supplied ComfyUI-OpticalStudioEnhance reference_chroma_light_node.py snapshot; source hash in migration_manifest.json at release root.
 
 Commercial revision:
+
 - Existing image transform retained; opt-in and YuNet engine pinned.
 - Multi-face bypass; unique sampled indices; valid preview tensor.
 - No YuNet download during jobs; bundled model required.
@@ -45,6 +46,28 @@ The existing `iso_sensor_noise` (default `0.0`), `subvisual_sin_jitter` (default
 this metadata toggle. These synthetic effects do not guarantee bypassing AI
 labels or copyright/audio matching, and do not establish authentic device provenance.
 
-CPU-safe checks: `python3 -m unittest discover -s tests -v`. New export-command
-unit tests mock subprocess, filesystem and ComfyUI boundaries; existing handoff
-checks run when their local dependencies are available, without downloads.
+## Source-aspect sizing and timeline fitting
+
+`SaoChepSourceAspectSizing` accepts a non-empty ComfyUI `IMAGE` batch plus a
+native pixel budget and delivery short side. It returns `native_width`,
+`native_height`, `delivery_width`, and `delivery_height`. Native dimensions
+uniformly scale toward the supplied pixel budget, uniformly scale down if an
+axis would exceed 1280, then round to 32-pixel steps within 256–1280. Extreme
+source ratios are accepted; the minimum native canvas may require downstream
+padding. Delivery keeps the source ratio, fixes the shorter edge to an even
+720 or 1080 pixels, and rounds the longer edge to an even pixel count. Callers
+choose the budget (Lite 576×1024, Pro 640×1152, Pro++ 704×1280) and short side.
+
+`SaoChepAdaptiveTimelineMerger` contain-fits original B-roll frames to the
+rendered delivery canvas with centered black padding instead of stretching.
+Explicit empty `actor_indices` metadata returns original footage fitted to the
+same delivery canvas. The scene router’s existing render-all fallback when no
+actor shots are detected is unchanged; this is not an all-B-roll detection fix.
+Existing actor placement and crossfade behavior is unchanged. Shot geometry also scales reference dimensions together to fit its
+canvas; thin images are no longer stretched to an artificial 64-pixel minimum.
+
+CPU-safe checks: `python3 -m unittest discover -s tests -v`. New source sizing
+tests use only the standard library and prove dimension bounds, alignment,
+source-ratio delivery, registration order, and contain-fit geometry. Existing
+ComfyUI tensor checks run only when their local dependencies are available;
+no downloads are performed.

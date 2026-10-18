@@ -249,8 +249,9 @@ class SaoChepShotGeometry:
             scale = scale_contain
             scale_mode = f"CONTAIN_FIT ({scale:.3f})"
 
-        scaled_w = max(64, min(target_width, int(round(orig_w * scale))))
-        scaled_h = max(64, min(target_height, int(round(orig_h * scale))))
+        scale = min(scale, target_width / float(orig_w), target_height / float(orig_h))
+        scaled_w = max(1, int(round(orig_w * scale)))
+        scaled_h = max(1, int(round(orig_h * scale)))
         char_scaled_bgr = cv2.resize(char_bgr, (scaled_w, scaled_h), interpolation=cv2.INTER_LANCZOS4)
 
         # 1:1 Head Top Alignment (Vertical)

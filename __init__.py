@@ -16,6 +16,7 @@ from .commercial_naturalize_export_node import SaoChepCommercialExport
 from .adaptive_clarity_enhancer_node import SaoChepAdaptiveClarityEnhancer
 from .shot_geometry_node import SaoChepShotGeometry
 from .ocular_steering_node import SaoChepOcularSteering
+from .source_aspect_sizing_node import SaoChepSourceAspectSizing
 
 _LOCK = threading.RLock()
 
@@ -107,6 +108,7 @@ NODE_CLASS_MAPPINGS = {
     "SaoChepDeliveryResize": SaoChepDeliveryResize,
     "SaoChepSaveReport": SaoChepSaveReport,
     "SaoChepShotGeometry": SaoChepShotGeometry,
+    "SaoChepSourceAspectSizing": SaoChepSourceAspectSizing,
     "SaoChepOcularSteering": SaoChepOcularSteering,
 }
 
@@ -118,6 +120,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SaoChepDeliveryResize": "SaoChep — Delivery resize",
     "SaoChepSaveReport": "SaoChep — Save report",
     "SaoChepShotGeometry": "SaoChep Shot Geometry & Floor Inpaint (On-Flow Preflight Node 9010)",
+    "SaoChepSourceAspectSizing": "SaoChep Source Aspect Sizing",
     "SaoChepOcularSteering": "SaoChep Ocular Steering & Anti-Glare (On-Flow Gaze Lock Node 9020)",
 }
 
