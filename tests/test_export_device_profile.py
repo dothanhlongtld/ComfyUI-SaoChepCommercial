@@ -89,9 +89,11 @@ class ExportDeviceProfileTests(unittest.TestCase):
         self.assertEqual(inputs["iso_sensor_noise"][1]["default"], 0.0)
         self.assertIs(inputs["subvisual_sin_jitter"][1]["default"], False)
         self.assertIs(inputs["audio_fingerprint_disrupt"][1]["default"], False)
+        self.assertIs(inputs["motion_interpolation"][1]["default"], False)
         parameters = inspect.signature(export.SaoChepCommercialExport.export_master).parameters
-        self.assertEqual(list(parameters)[-2:], ["filename_prefix", "device_profile_enabled"])
+        self.assertEqual(list(parameters)[-3:], ["filename_prefix", "device_profile_enabled", "motion_interpolation"])
         self.assertIs(parameters["device_profile_enabled"].default, True)
+        self.assertIs(parameters["motion_interpolation"].default, False)
         export.SaoChepCommercialExport().export_master(
             str(self.source), "iPhone 15 Pro Max", 0.0, False, False,
             "48000", 20, 24, "fast", False, "nested/master",
@@ -115,6 +117,16 @@ class ExportDeviceProfileTests(unittest.TestCase):
         self.assert_privacy_and_encoding(command)
         self.assertEqual(command[command.index("-vf") + 1], "fps=30:round=near")
         self.assertEqual(command[command.index("-af") + 1], "aresample=48000")
+
+    def test_motion_interpolation_filter_and_timeout(self):
+        command, _ = self.invoke(output_fps=30, motion_interpolation=True)
+        self.assertIn("minterpolate=fps=30:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1", command[command.index("-vf") + 1])
+        self.assertEqual(self.run.call_args.kwargs.get("timeout"), 600)
+
+    def test_default_motion_interpolation_is_fast_resample_and_180s_timeout(self):
+        command, _ = self.invoke(output_fps=30, motion_interpolation=False)
+        self.assertIn("fps=30:round=near", command[command.index("-vf") + 1])
+        self.assertEqual(self.run.call_args.kwargs.get("timeout"), 180)
 
     def test_true_injects_fixed_iphone17_and_time_with_privacy_flags(self):
         command, _ = self.invoke(device_profile_enabled=True, device_brand="iPhone 17")

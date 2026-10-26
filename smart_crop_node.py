@@ -25,7 +25,7 @@ class SaoChepSmartFaceCrop:
         return {
             "required": {
                 "image": ("IMAGE", {"tooltip": "Input character image [1, H, W, C] or [B, H, W, C]"}),
-                "target_aspect": (["9:16", "16:9", "1:1", "bypass"], {"default": "9:16"}),
+                "target_aspect": (["9:16", "16:9", "1:1", "head_torso_clip", "bypass"], {"default": "9:16"}),
                 "headroom_percent": ("FLOAT", {"default": 12.0, "min": 5.0, "max": 25.0, "step": 1.0, "tooltip": "Top margin above head top (default 12%)"}),
             }
         }
@@ -78,7 +78,63 @@ class SaoChepSmartFaceCrop:
         h, w = ref_np.shape[:2]
         current_ratio = w / float(max(1, h))
 
-        # 1. Zero-copy pass-through if aspect ratio already matches (< 2% diff)
+        # 1. Head & Torso Clip Mode for CLIP-Vision token density
+        if target_aspect == "head_torso_clip":
+            # Detect face first
+            cx, cy = w / 2.0, h / 2.0
+            fw, fh = w * 0.25, h * 0.25
+            top = max(0.0, cy - h * 0.20)
+            has_face = False
+
+            model_path = self._get_yunet_model_path()
+            if model_path and os.path.exists(model_path):
+                try:
+                    detector = cv2.FaceDetectorYN.create(model_path, "", (w, h), score_threshold=0.5)
+                    bgr = cv2.cvtColor(ref_np, cv2.COLOR_RGB2BGR)
+                    faces = detector.detect(bgr)
+                    if faces[1] is not None and len(faces[1]) > 0:
+                        best_face = max(faces[1], key=lambda f: f[2] * f[3])
+                        fx, fy, fw, fh = best_face[0:4]
+                        cx = fx + fw / 2.0
+                        cy = fy + fh / 2.0
+                        top = max(0.0, fy - fh * 0.15)
+                        has_face = True
+                except Exception as e:
+                    print(f"[SaoChepSmartFaceCrop] YuNet detection fallback ({e})")
+
+            # Bypass if already a close-up portrait (face height occupies >= 35% of image height)
+            if has_face and (fh / float(h)) >= 0.35:
+                report = f"BYPASS_ALREADY_HEAD_TORSO ({w}x{h}, face_ratio={fh/h:.2f})"
+                return (image, report)
+
+            if has_face:
+                # 15% headroom above face top, extend downwards 2.5x face height to cover torso
+                crop_h = min(h, int(round(fh * 2.5)))
+                y1 = max(0, int(round(fy - fh * 0.15)))
+                y2 = min(h, y1 + crop_h)
+                if y2 - y1 < crop_h:
+                    y1 = max(0, y2 - crop_h)
+                crop_w = min(w, max(int(round(fw * 2.2)), int(round(crop_h * 0.75))))
+                x1 = max(0, min(int(round(cx - crop_w / 2.0)), w - crop_w))
+                x2 = min(w, x1 + crop_w)
+            else:
+                # Fallback when no face detected: upper 55% center crop
+                crop_h = int(round(h * 0.55))
+                y1, y2 = 0, crop_h
+                crop_w = min(w, int(round(crop_h * 0.75)))
+                x1 = max(0, (w - crop_w) // 2)
+                x2 = min(w, x1 + crop_w)
+
+            if is_torch:
+                cropped = image[:, y1:y2, x1:x2, :]
+            else:
+                cropped = image[y1:y2, x1:x2]
+
+            report = f"CROPPED_HEAD_TORSO_CLIP: {w}x{h} -> {x2-x1}x{y2-y1} (face_detected={has_face}, box=[{x1},{y1},{x2},{y2}])"
+            print(f"[SaoChepSmartFaceCrop] {report}")
+            return (cropped, report)
+
+        # 2. Zero-copy pass-through if aspect ratio already matches (< 2% diff)
         if abs(current_ratio - target_ratio) <= 0.02:
             report = f"BYPASS_ALREADY_ASPECT_{target_aspect} ({w}x{h}, current_ratio={current_ratio:.4f})"
             return (image, report)

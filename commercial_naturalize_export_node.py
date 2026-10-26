@@ -135,6 +135,7 @@ class SaoChepCommercialExport:
                 "cleanup_intermediate": ("BOOLEAN", {"default": True}),
                 "filename_prefix": ("STRING", {"default": "saochep/master"}),
                 "device_profile_enabled": ("BOOLEAN", {"default": True, "tooltip": "Inject synthetic device metadata; source metadata/chapter stripping remains enabled when off"}),
+                "motion_interpolation": ("BOOLEAN", {"default": False, "tooltip": "Apply FFmpeg optical flow motion interpolation (minterpolate) for smooth 24fps -> 30fps conversion"}),
             }
         }
 
@@ -142,7 +143,8 @@ class SaoChepCommercialExport:
                       subvisual_sin_jitter=False, audio_fingerprint_disrupt=False,
                       audio_sample_rate="48000", crf=18,
                       output_fps=30, preset="medium", cleanup_intermediate=True,
-                      filename_prefix="saochep/master", device_profile_enabled=True):
+                      filename_prefix="saochep/master", device_profile_enabled=True,
+                      motion_interpolation=False):
         
         raw_video_path = find_mp4_path(filenames)
         if not raw_video_path:
@@ -214,7 +216,11 @@ class SaoChepCommercialExport:
         filters = []
         # Preserve full timeline and audio alignment (240 -> 240 frames preserved)
         if output_fps and int(output_fps) > 0:
-            filters.append(f"fps={int(output_fps)}:round=near")
+            target_fps = int(output_fps)
+            if motion_interpolation:
+                filters.append(f"minterpolate=fps={target_fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1")
+            else:
+                filters.append(f"fps={target_fps}:round=near")
         if iso_sensor_noise > 0.05:
             c0s = round(iso_sensor_noise, 2)
             c1s = round(iso_sensor_noise * 0.55, 2)
@@ -263,11 +269,12 @@ class SaoChepCommercialExport:
         ]
 
         device_label = device['model'] if device is not None else "disabled"
-        print(f"[SaoChepCommercialExport] Running FFmpeg Naturalize Filter (Device: {device_label}, FPS: {output_fps}, Preset: {preset}, Audio: {audio_sample_rate}Hz)...")
+        timeout_seconds = 600 if motion_interpolation else 180
+        print(f"[SaoChepCommercialExport] Running FFmpeg Naturalize Filter (Device: {device_label}, FPS: {output_fps}, Preset: {preset}, Audio: {audio_sample_rate}Hz, MCI: {motion_interpolation})...")
         try:
-            res = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, encoding="utf-8", timeout=180)
+            res = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, encoding="utf-8", timeout=timeout_seconds)
         except subprocess.TimeoutExpired as tex:
-            raise RuntimeError(f"[SaoChepCommercialExport ERROR] FFmpeg process timed out after 180s: {tex}")
+            raise RuntimeError(f"[SaoChepCommercialExport ERROR] FFmpeg process timed out after {timeout_seconds}s: {tex}")
         except Exception as ex:
             raise RuntimeError(f"[SaoChepCommercialExport ERROR] FFmpeg execution exception: {ex}")
 

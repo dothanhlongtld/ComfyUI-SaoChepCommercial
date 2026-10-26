@@ -176,6 +176,20 @@ try:
 except Exception:
     pass
 
+try:
+    from .subtitle_purge_node import SaoChepSubtitlePurge
+    NODE_CLASS_MAPPINGS["SaoChepSubtitlePurge"] = SaoChepSubtitlePurge
+    NODE_DISPLAY_NAME_MAPPINGS["SaoChepSubtitlePurge"] = "SaoChep Subtitle Purge (Zero-Copy On-Flow)"
+except Exception:
+    pass
+
+try:
+    from .dynamic_background_composite_node import SaoChepDynamicBackgroundComposite
+    NODE_CLASS_MAPPINGS["SaoChepDynamicBackgroundComposite"] = SaoChepDynamicBackgroundComposite
+    NODE_DISPLAY_NAME_MAPPINGS["SaoChepDynamicBackgroundComposite"] = "SaoChep Dynamic Background Composite (On-Flow Feather Blend)"
+except Exception:
+    pass
+
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
 
 

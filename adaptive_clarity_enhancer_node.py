@@ -111,27 +111,46 @@ class SaoChepAdaptiveClarityEnhancer:
         blur_med  = F.avg_pool2d(Y_4d, kernel_size=13, stride=1, padding=6)
         clarity = (blur_fine - blur_med).squeeze(1)
 
-        Y_enhanced = torch.clamp(Y_tone + sharpen_term + clarity_strength * clarity, 0.0, 1.0)
+        # 5. Scene-Adaptive Scaling & Dynamic Router
+        eff_sharpen = sharpen_strength
+        eff_clarity = clarity_strength
+        eff_blend   = blend_opacity
 
-        # 5. Adaptive Dynamic Router
-        use_luma_protection = False
         if adaptive_mode:
-            max_c = torch.max(chunk, dim=-1)[0]
-            min_c = torch.min(chunk, dim=-1)[0]
-            sat_mean = ((max_c - min_c) / (max_c + 1e-5)).mean().item()
-            # If saturation is high (>= 0.28) -> Already saturated, lock chroma
-            if sat_mean >= 0.28:
-                use_luma_protection = True
+            # Measure global average scene luminance to detect low-key scenes
+            scene_luma = Y_base.mean().item()
+            if scene_luma < 0.35:
+                # Scale back enhancement on low-key scenes to prevent noise amplification
+                scene_scale = max(0.35, scene_luma / 0.35)
+                eff_sharpen = sharpen_strength * scene_scale
+                eff_clarity = clarity_strength * scene_scale
+                eff_blend   = blend_opacity * scene_scale
 
-        if use_luma_protection:
-            # Mode B: Luma-Protected Multiply (Zero Color Shift, Zero Color Burn)
-            Y_mult = Y_base * (1.0 - blend_opacity) + (Y_base * Y_enhanced) * blend_opacity
-            R_out = torch.clamp(Y_mult + 1.402 * Cr_base, 0.0, 1.0)
-            G_out = torch.clamp(Y_mult - 0.344136 * Cb_base - 0.714136 * Cr_base, 0.0, 1.0)
-            B_out = torch.clamp(Y_mult + 1.772 * Cb_base, 0.0, 1.0)
+            # Recompute directional sharpening with scene-scaled factor if adjusted
+            if eff_sharpen != sharpen_strength and sharpen_strength > 0.001:
+                sharpen_term = eff_sharpen * best_f
+
+            Y_enhanced = torch.clamp(Y_tone + sharpen_term + eff_clarity * clarity, 0.0, 1.0)
+
+            # Shadow Toe Guard (Y < 0.20): protect shadow regions from luminance collapse (< 5% max drop)
+            Y_mult_candidate = Y_base * (1.0 - eff_blend) + (Y_base * Y_enhanced) * eff_blend
+            # Enforce max 5% drop limit on shadow luminance
+            min_allowed_Y = Y_base * 0.95
+            Y_guarded = torch.maximum(Y_mult_candidate, min_allowed_Y)
+
+            # Smoothstep transition for shadow toe [0.0, 0.20]
+            t_toe = torch.clamp(Y_base / 0.20, 0.0, 1.0)
+            toe_weight = t_toe * t_toe * (3.0 - 2.0 * t_toe)
+            Y_final_luma = Y_base * (1.0 - toe_weight) + Y_guarded * toe_weight
+
+            # Chroma Decoupling: Lock original Cb, Cr to eliminate color shift and saturation blowout
+            R_out = torch.clamp(Y_final_luma + 1.402 * Cr_base, 0.0, 1.0)
+            G_out = torch.clamp(Y_final_luma - 0.344136 * Cb_base - 0.714136 * Cr_base, 0.0, 1.0)
+            B_out = torch.clamp(Y_final_luma + 1.772 * Cb_base, 0.0, 1.0)
             return torch.stack([R_out, G_out, B_out], dim=-1)
         else:
-            # Mode A: RGB Multiply (Cures milky/washed-out haze)
+            # Legacy Mode A: RGB Multiply (when adaptive_mode is explicitly False)
+            Y_enhanced = torch.clamp(Y_tone + sharpen_term + eff_clarity * clarity, 0.0, 1.0)
             Cb_tone = -0.168736 * R_tone - 0.331264 * G_tone + 0.5 * B_tone
             Cr_tone = 0.5 * R_tone - 0.418688 * G_tone - 0.081312 * B_tone
             R_lay = torch.clamp(Y_enhanced + 1.402 * Cr_tone, 0.0, 1.0)

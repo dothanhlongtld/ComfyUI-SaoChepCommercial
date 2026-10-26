@@ -71,3 +71,28 @@ tests use only the standard library and prove dimension bounds, alignment,
 source-ratio delivery, registration order, and contain-fit geometry. Existing
 ComfyUI tensor checks run only when their local dependencies are available;
 no downloads are performed.
+
+## Adaptive clarity enhancer (Shadow Toe Guard & Chroma Decoupling)
+
+`SaoChepAdaptiveClarityEnhancer` implements:
+- **Shadow Toe Guard ($Y < 0.20$)**: Limits luminance drop in dark regions to $< 5\%$ using a smoothstep toe transition curve ($[0.0, 0.20]$), preventing crushed blacks.
+- **Chroma Decoupling ($YC_bC_r$)**: Micro-contrast and sharpening apply strictly to the Luma channel ($Y$), keeping original $C_b, C_r$ chromaticity intact to prevent oversaturation and color burn.
+- **Scene-Adaptive Scaling**: When average scene luminance drops below $0.35$ (low-key scenes), sharpening and clarity strengths automatically scale down to avoid noise amplification.
+
+## Smart face crop (`head_torso_clip`)
+
+`SaoChepSmartFaceCrop` includes a dedicated `head_torso_clip` mode in `target_aspect`. It uses the bundled YuNet detector to locate the face, adds 15% headroom above the head top, and extends $2.5\times$ face height downwards to frame head and torso. Images that are already close-up portraits ($f_h / H \ge 0.35$) automatically bypass. This provides 6x face token density when feeding CLIP-Vision (Node 76).
+
+## Motion interpolation export (Optical Flow MCI)
+
+`SaoChepCommercialExport` adds optional BOOLEAN `motion_interpolation` (default `False`). When enabled, FFmpeg uses `minterpolate=fps={output_fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1` for motion-compensated frame rate conversion (e.g. 24fps -> 30fps) with an extended 600s timeout. When disabled, standard near-frame resampling runs fast with a 180s timeout. Full timeline and audio sync are strictly preserved (no frame drops).
+
+## Subtitle purge (Zero-Copy On-Flow)
+
+`SaoChepSubtitlePurge` scans the lower bottom zone ($Y \ge 0.75$) for hardcoded subtitles or watermarks:
+- Clean video without subtitles: **100% Zero-Copy Bypass** (0ms, 0 pixels altered).
+- Subtitled video: Localized Telea inpainting on detected text glyphs to prevent DiT hallucination.
+
+## Dynamic background composite
+
+`SaoChepDynamicBackgroundComposite` composites rendered AI character frames onto original camera background plates using soft-feathered alpha blending (Gaussian blur radius 2–4px) to eliminate edge halos while fully preserving background camera motion, foliage, and traffic dynamics.
