@@ -53,7 +53,7 @@ class SaoChepAdaptiveSceneRouter:
         return {
             "required": {
                 "images": ("IMAGE", {"tooltip": "Driving video frame batch [B, H, W, C] from VHS_LoadVideo"}),
-                "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 60.0, "step": 1.0}),
+                "fps": ("FLOAT,INT", {"default": 24.0, "min": 1.0, "max": 60.0, "step": 1.0}),
                 "scan_step_seconds": ("FLOAT", {"default": 0.35, "min": 0.1, "max": 2.0, "step": 0.05}),
                 "min_actor_duration": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 5.0, "step": 0.1}),
                 "min_broll_duration": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 5.0, "step": 0.1}),
