@@ -104,11 +104,17 @@ def rgb_to_cielab_float32(srgb: np.ndarray) -> np.ndarray:
     return np.stack([L, a, b], axis=-1).astype(np.float32)
 
 
-def transform_cielab_batch_np(batch_rgb: np.ndarray, offset_a: float, offset_b: float):
+def transform_cielab_batch_np(batch_rgb: np.ndarray, offset_a, offset_b):
     lab = rgb_to_cielab_float32(batch_rgb)
     L = lab[..., 0]
-    a = lab[..., 1] + np.float32(offset_a)
-    b = lab[..., 2] + np.float32(offset_b)
+    if isinstance(offset_a, np.ndarray):
+        a = lab[..., 1] + offset_a.astype(np.float32)
+    else:
+        a = lab[..., 1] + np.float32(offset_a)
+    if isinstance(offset_b, np.ndarray):
+        b = lab[..., 2] + offset_b.astype(np.float32)
+    else:
+        b = lab[..., 2] + np.float32(offset_b)
 
     fy = (L + 16.0) / 116.0
     fx = fy + a / 500.0
@@ -142,8 +148,8 @@ def transform_cielab_batch_np(batch_rgb: np.ndarray, offset_a: float, offset_b: 
 
 def transform_cielab_batch_torch(
     batch_tensor: "torch.Tensor",
-    offset_a: float,
-    offset_b: float,
+    offset_a,
+    offset_b,
     device: str = "cuda",
     sync_cuda: bool = False,
 ):
@@ -168,8 +174,15 @@ def transform_cielab_batch_torch(
     fz = torch.where(zr > eps, torch.pow(torch.clamp(zr, min=1e-8), 1.0 / 3.0), (kappa * zr + 16.0) / 116.0)
 
     L = 116.0 * fy - 16.0
-    a = 500.0 * (fx - fy) + float(offset_a)
-    b = 200.0 * (fy - fz) + float(offset_b)
+    if isinstance(offset_a, torch.Tensor):
+        a = 500.0 * (fx - fy) + offset_a.to(device=inp.device, dtype=inp.dtype)
+    else:
+        a = 500.0 * (fx - fy) + float(offset_a)
+
+    if isinstance(offset_b, torch.Tensor):
+        b = 200.0 * (fy - fz) + offset_b.to(device=inp.device, dtype=inp.dtype)
+    else:
+        b = 200.0 * (fy - fz) + float(offset_b)
 
     fy2 = (L + 16.0) / 116.0
     fx2 = fy2 + a / 500.0
@@ -420,6 +433,9 @@ class ReferenceChromaLightTest:
             }
             return (images, images[:1], json.dumps(rep, indent=2))
 
+        frame_offsets_a = None
+        frame_offsets_b = None
+
         if test_mode == "TRANSFORM_ONLY_TEST":
             offset_a = 0.0987
             offset_b = 1.1109
@@ -507,6 +523,18 @@ class ReferenceChromaLightTest:
             offset_b = np.clip(raw_offset_b, -max_ab_offset, max_ab_offset)
             clamped = (offset_a != raw_offset_a) or (offset_b != raw_offset_b)
 
+            sample_frames = [s["frame_idx"] for s in valid_vid_samples]
+            sample_offsets_a = [float(np.clip(strength * (ref_sample["a"] - s["a"]), -max_ab_offset, max_ab_offset)) for s in valid_vid_samples]
+            sample_offsets_b = [float(np.clip(strength * (ref_sample["b"] - s["b"]), -max_ab_offset, max_ab_offset)) for s in valid_vid_samples]
+
+            drift_detected = (max(sample_offsets_a) - min(sample_offsets_a) > 0.4) or (max(sample_offsets_b) - min(sample_offsets_b) > 0.4)
+            if drift_detected and len(valid_vid_samples) >= 3 and num_frames > 1:
+                frame_offsets_a = np.interp(np.arange(num_frames), sample_frames, sample_offsets_a).astype(np.float32)
+                frame_offsets_b = np.interp(np.arange(num_frames), sample_frames, sample_offsets_b).astype(np.float32)
+            else:
+                frame_offsets_a = None
+                frame_offsets_b = None
+
             max_offset_magnitude = max(abs(float(offset_a)), abs(float(offset_b)))
             t_sampling_stats_ms = (time.time() - t_stats_start) * 1000.0
 
@@ -590,8 +618,14 @@ class ReferenceChromaLightTest:
                     t_device_transfer_ms += (time.time() - t_dt_sub1) * 1000.0
 
                     t_col_sub = time.time()
+                    if frame_offsets_a is not None:
+                        step_off_a = torch.from_numpy(frame_offsets_a[i : i + cur_step]).to(device=chunk_cuda.device, dtype=torch.float32).view(-1, 1, 1)
+                        step_off_b = torch.from_numpy(frame_offsets_b[i : i + cur_step]).to(device=chunk_cuda.device, dtype=torch.float32).view(-1, 1, 1)
+                    else:
+                        step_off_a = offset_a
+                        step_off_b = offset_b
                     chunk_res, oof = transform_cielab_batch_torch(
-                        chunk_cuda, offset_a, offset_b, device="cuda", sync_cuda=bool(debug_enabled)
+                        chunk_cuda, step_off_a, step_off_b, device="cuda", sync_cuda=bool(debug_enabled)
                     )
                     t_color_transform_ms += (time.time() - t_col_sub) * 1000.0
 
@@ -623,7 +657,9 @@ class ReferenceChromaLightTest:
                 first_len = min(batch_frames, b)
                 parity_chunk_gpu = corrected_images[0:first_len].numpy() if is_tensor_input else corrected_images[0:first_len]
                 first_chunk_cpu_input = images[0:first_len].cpu().numpy() if hasattr(images, "cpu") else np.asarray(images[0:first_len])
-                parity_chunk_cpu, _ = transform_cielab_batch_np(first_chunk_cpu_input, offset_a, offset_b)
+                first_off_a = frame_offsets_a[0:first_len, None, None] if frame_offsets_a is not None else offset_a
+                first_off_b = frame_offsets_b[0:first_len, None, None] if frame_offsets_b is not None else offset_b
+                parity_chunk_cpu, _ = transform_cielab_batch_np(first_chunk_cpu_input, first_off_a, first_off_b)
                 parity_diff = np.abs(parity_chunk_gpu - parity_chunk_cpu)
                 parity_mae = float(np.mean(parity_diff))
                 parity_max = float(np.max(parity_diff))
@@ -643,7 +679,13 @@ class ReferenceChromaLightTest:
                 chunk = images[i:j]
                 chunk_np = chunk.cpu().numpy() if (HAS_TORCH and isinstance(chunk, torch.Tensor)) else np.asarray(chunk)
                 t_col_sub = time.time()
-                chunk_res, oof = transform_cielab_batch_np(chunk_np, offset_a, offset_b)
+                if frame_offsets_a is not None:
+                    step_off_a = frame_offsets_a[i:j, None, None]
+                    step_off_b = frame_offsets_b[i:j, None, None]
+                else:
+                    step_off_a = offset_a
+                    step_off_b = offset_b
+                chunk_res, oof = transform_cielab_batch_np(chunk_np, step_off_a, step_off_b)
                 t_color_transform_ms += (time.time() - t_col_sub) * 1000.0
                 oof_ratios.append(oof)
                 if is_tensor_input:
@@ -656,7 +698,13 @@ class ReferenceChromaLightTest:
             for i in range(b):
                 f_np = images[i].cpu().numpy() if (HAS_TORCH and hasattr(images, "cpu")) else images[i]
                 t_col_sub = time.time()
-                f_res, oof = transform_cielab_batch_np(f_np[None, ...], offset_a, offset_b)
+                if frame_offsets_a is not None:
+                    step_off_a = frame_offsets_a[i]
+                    step_off_b = frame_offsets_b[i]
+                else:
+                    step_off_a = offset_a
+                    step_off_b = offset_b
+                f_res, oof = transform_cielab_batch_np(f_np[None, ...], step_off_a, step_off_b)
                 t_color_transform_ms += (time.time() - t_col_sub) * 1000.0
                 oof_ratios.append(oof)
                 if is_tensor_input:

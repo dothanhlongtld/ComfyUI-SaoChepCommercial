@@ -4,6 +4,7 @@ SaoChepAdaptiveClarityEnhancer - 100% PyTorch CUDA On-Flow
 ByteDance CapCut Post-Processing Engine for ComfyUI
 Ref: HANDOVER_ADAPTIVE_CLARITY_ENHANCER.md
 """
+import math
 import torch
 import torch.nn.functional as F
 
@@ -215,7 +216,54 @@ class SaoChepAdaptiveClarityEnhancer:
         Eliminates step discontinuity at second 8 (tail_start).
         """
         B = images.shape[0]
-        # Pass through natural temporal progression without artificial tail color alteration
+        if B < 60:
+            return images
+
+        # 1. Spatial frame means [B, 3] in [0.0, 1.0]
+        frame_means = images.mean(dim=(1, 2))  # [B, 3]
+
+        # 2. Steady-state baseline: rolling window after head stabilization (frames head_len..min(B, head_len+48))
+        head_len = min(60, max(24, int(B * 0.20)))
+        steady_end = min(B, max(head_len + 48, int(B * 0.50)))
+        stable_window = frame_means[head_len : steady_end]
+        if len(stable_window) == 0:
+            return images
+        stable_baseline = torch.median(stable_window, dim=0).values  # [3]
+
+        tail_start = steady_end
+        if tail_start >= B - 8:
+            return images
+
+        # 3. Low-pass smoothed macro trajectory over the tail to avoid per-frame flicker
+        kernel_size = min(31, max(5, ((B - tail_start) // 4) * 2 + 1))
+        pad = kernel_size // 2
+        padded = F.pad(
+            frame_means.unsqueeze(0).transpose(1, 2), (pad, pad), mode="replicate"
+        ).transpose(1, 2).squeeze(0)
+        smoothed_means = torch.empty_like(frame_means)
+        for i in range(B):
+            smoothed_means[i] = padded[i : i + kernel_size].mean(dim=0)
+
+        # 4. Smooth cosine ease-in transition across ramp_len frames
+        ramp_len = max(12, int((B - tail_start) * 0.35))
+        pi_val = 3.141592653589793
+
+        for t in range(tail_start, B):
+            delta = smoothed_means[t] - stable_baseline  # [3] (R, G, B)
+            # Decompose into luminance drift vs pure chromatic drift
+            # Y = 0.299 R + 0.587 G + 0.114 B
+            y_delta = 0.299 * delta[0] + 0.587 * delta[1] + 0.114 * delta[2]
+            chroma_delta = delta - y_delta
+            # Correct 100% of chromatic drift and 30% of luminance drift (to preserve legitimate lighting progression)
+            target_correction = chroma_delta + 0.3 * y_delta
+
+            progress = min(1.0, float(t - tail_start) / float(ramp_len))
+            weight = 0.5 * (1.0 - math.cos(pi_val * progress))
+
+            correction = target_correction * weight
+            if torch.max(torch.abs(correction)) > 0.004:
+                images[t] = torch.clamp(images[t] - correction.view(1, 1, 3), 0.0, 1.0)
+
         return images
 
     def process(self, images, adaptive_mode=True, blend_opacity=0.31, sharpen_strength=1.0, clarity_strength=0.4):
