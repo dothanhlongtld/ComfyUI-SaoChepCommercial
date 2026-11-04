@@ -18,6 +18,23 @@ import cv2
 import numpy as np
 import torch
 
+_REMBG_SESSION = None
+
+
+def _get_rembg_session():
+    global _REMBG_SESSION
+    if _REMBG_SESSION is None:
+        try:
+            import rembg
+            _REMBG_SESSION = rembg.new_session('birefnet-portrait')
+        except Exception:
+            try:
+                import rembg
+                _REMBG_SESSION = rembg.new_session()
+            except Exception:
+                _REMBG_SESSION = False
+    return _REMBG_SESSION if _REMBG_SESSION is not False else None
+
 
 class SaoChepShotGeometry:
     CATEGORY = "SaoChep/Commercial"
@@ -79,81 +96,83 @@ class SaoChepShotGeometry:
         1. Median ambient color from frame corners.
         2. Median driving head width and vertical position.
         """
+        self._temp_centers = []
         if driving_video is None or len(driving_video) == 0:
             return np.array([128, 128, 128], dtype=np.uint8), None, None, 288.0, (1024, 576)
 
-        num_frames = len(driving_video)
-        sample_indices = [0]
-        if num_frames > 1:
-            step = max(1, num_frames // 5)
-            sample_indices = list(range(0, num_frames, step))[:5]
-            if (num_frames - 1) not in sample_indices:
-                sample_indices.append(num_frames - 1)
+        try:
+            num_frames = len(driving_video)
+            sample_indices = [0]
+            if num_frames > 1:
+                step = max(1, num_frames // 5)
+                sample_indices = list(range(0, num_frames, step))[:5]
+                if (num_frames - 1) not in sample_indices:
+                    sample_indices.append(num_frames - 1)
 
-        valid_bg_pixels = []
-        drv_head_widths = []
-        drv_head_tops = []
-        drv_shape = (1024, 576)
+            valid_bg_pixels = []
+            drv_head_widths = []
+            drv_head_tops = []
+            drv_head_centers = []
+            drv_shape = (1024, 576)
 
-        for s_idx in sample_indices:
-            frame_rgb = (driving_video[s_idx].detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
-            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-            h, w = frame_bgr.shape[:2]
-            drv_shape = (h, w)
+            for s_idx in sample_indices:
+                frame_rgb = (driving_video[s_idx].detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
+                frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                h, w = frame_bgr.shape[:2]
+                drv_shape = (h, w)
 
-            # Sample inset zones (away from extreme edges to avoid black letterbox/pillarbox)
-            inset_x = max(12, int(w * 0.08))
-            inset_y = max(12, int(h * 0.08))
-            zone_w = max(16, int(w * 0.15))
-            zone_h = max(16, int(h * 0.15))
+                # Sample inset zones (away from extreme edges to avoid black letterbox/pillarbox)
+                inset_x = max(12, int(w * 0.08))
+                inset_y = max(12, int(h * 0.08))
+                zone_w = max(16, int(w * 0.15))
+                zone_h = max(16, int(h * 0.15))
 
-            tl = frame_bgr[inset_y:inset_y+zone_h, inset_x:inset_x+zone_w].reshape(-1, 3)
-            tr = frame_bgr[inset_y:inset_y+zone_h, -inset_x-zone_w:-inset_x].reshape(-1, 3)
-            bl = frame_bgr[-inset_y-zone_h:-inset_y, inset_x:inset_x+zone_w].reshape(-1, 3)
-            br = frame_bgr[-inset_y-zone_h:-inset_y, -inset_x-zone_w:-inset_x].reshape(-1, 3)
-            # Upper lateral zones (away from central dancer)
-            upper_l = frame_bgr[int(h * 0.10):int(h * 0.30), inset_x:int(w * 0.28)].reshape(-1, 3)
-            upper_r = frame_bgr[int(h * 0.10):int(h * 0.30), -int(w * 0.28):-inset_x].reshape(-1, 3)
+                tl = frame_bgr[inset_y:inset_y+zone_h, inset_x:inset_x+zone_w].reshape(-1, 3)
+                tr = frame_bgr[inset_y:inset_y+zone_h, -inset_x-zone_w:-inset_x].reshape(-1, 3)
+                bl = frame_bgr[-inset_y-zone_h:-inset_y, inset_x:inset_x+zone_w].reshape(-1, 3)
+                br = frame_bgr[-inset_y-zone_h:-inset_y, -inset_x-zone_w:-inset_x].reshape(-1, 3)
+                # Upper lateral zones (away from central dancer)
+                upper_l = frame_bgr[int(h * 0.10):int(h * 0.30), inset_x:int(w * 0.28)].reshape(-1, 3)
+                upper_r = frame_bgr[int(h * 0.10):int(h * 0.30), -int(w * 0.28):-inset_x].reshape(-1, 3)
 
-            candidates = np.concatenate([tl, tr, bl, br, upper_l, upper_r], axis=0)
-            # Filter out dark letterbox/shadow pixels (mean < 35 or max < 45)
-            non_letterbox = candidates[(np.mean(candidates, axis=1) >= 35) & (np.max(candidates, axis=1) >= 45)]
-            if len(non_letterbox) > 50:
-                valid_bg_pixels.append(non_letterbox)
-            elif len(candidates) > 0:
-                valid_bg_pixels.append(candidates)
+                candidates = np.concatenate([tl, tr, bl, br, upper_l, upper_r], axis=0)
+                # Filter out dark letterbox/shadow pixels (mean < 35 or max < 45)
+                non_letterbox = candidates[(np.mean(candidates, axis=1) >= 35) & (np.max(candidates, axis=1) >= 45)]
+                if len(non_letterbox) > 50:
+                    valid_bg_pixels.append(non_letterbox)
+                elif len(candidates) > 0:
+                    valid_bg_pixels.append(candidates)
 
-            faces = self._detect_faces_yunet(frame_bgr)
-            if faces is not None and len(faces) > 0:
-                primary_f = max(faces, key=lambda f: float(f[2]) * float(f[3]))
-                if primary_f[2] > 15:
-                    drv_head_widths.append(float(primary_f[2]))
-                    drv_head_tops.append(float(primary_f[1]))
-                    drv_head_centers = getattr(self, '_temp_centers', [])
-                    drv_head_centers.append(float(primary_f[0] + primary_f[2] / 2.0))
-                    self._temp_centers = drv_head_centers
+                faces = self._detect_faces_yunet(frame_bgr)
+                if faces is not None and len(faces) > 0:
+                    primary_f = max(faces, key=lambda f: float(f[2]) * float(f[3]))
+                    if primary_f[2] > 15:
+                        drv_head_widths.append(float(primary_f[2]))
+                        drv_head_tops.append(float(primary_f[1]))
+                        drv_head_centers.append(float(primary_f[0] + primary_f[2] / 2.0))
+                        self._temp_centers = drv_head_centers
 
-        if len(valid_bg_pixels) > 0:
-            all_bg = np.concatenate(valid_bg_pixels, axis=0)
-            clean_bg = all_bg[(np.mean(all_bg, axis=1) >= 35) & (np.max(all_bg, axis=1) >= 45)]
-            if len(clean_bg) > 50:
-                median_ambient_bgr = np.median(clean_bg, axis=0).astype(np.uint8)
+            if len(valid_bg_pixels) > 0:
+                all_bg = np.concatenate(valid_bg_pixels, axis=0)
+                clean_bg = all_bg[(np.mean(all_bg, axis=1) >= 35) & (np.max(all_bg, axis=1) >= 45)]
+                if len(clean_bg) > 50:
+                    median_ambient_bgr = np.median(clean_bg, axis=0).astype(np.uint8)
+                else:
+                    median_ambient_bgr = np.median(all_bg, axis=0).astype(np.uint8)
             else:
-                median_ambient_bgr = np.median(all_bg, axis=0).astype(np.uint8)
-        else:
-            median_ambient_bgr = np.array([128, 128, 128], dtype=np.uint8)
+                median_ambient_bgr = np.array([128, 128, 128], dtype=np.uint8)
 
-        # Safeguard: If median is still dark (< 50 on mean channel), default to neutral mid-gray
-        if float(np.mean(median_ambient_bgr)) < 50.0:
-            median_ambient_bgr = np.array([128, 128, 128], dtype=np.uint8)
+            # Safeguard: If median is still dark (< 50 on mean channel), default to neutral mid-gray
+            if float(np.mean(median_ambient_bgr)) < 50.0:
+                median_ambient_bgr = np.array([128, 128, 128], dtype=np.uint8)
 
-        med_head_w = float(np.median(drv_head_widths)) if drv_head_widths else None
-        med_head_y = float(np.median(drv_head_tops)) if drv_head_tops else None
-        centers = getattr(self, '_temp_centers', [])
-        med_head_cx = float(np.median(centers)) if centers else (drv_shape[1] / 2.0)
-        self._temp_centers = []
+            med_head_w = float(np.median(drv_head_widths)) if drv_head_widths else None
+            med_head_y = float(np.median(drv_head_tops)) if drv_head_tops else None
+            med_head_cx = float(np.median(drv_head_centers)) if drv_head_centers else (drv_shape[1] / 2.0)
 
-        return median_ambient_bgr, med_head_w, med_head_y, med_head_cx, drv_shape
+            return median_ambient_bgr, med_head_w, med_head_y, med_head_cx, drv_shape
+        finally:
+            self._temp_centers = []
 
     def apply_geometry(self, character_image, target_width=576, target_height=1024,
                        half_body_floor_inpaint=True, ambient_autofill=True, driving_video=None):
@@ -178,22 +197,33 @@ class SaoChepShotGeometry:
             ambient_bgr = ref_corner
         else:
             # 1.5 On-Flow Auto-Matting: Clean extraction via BiRefNet-Portrait on ambient background
+            pil_char = None
+            res_rgba = None
             try:
                 import rembg
                 from PIL import Image
                 pil_char = Image.fromarray(cv2.cvtColor(char_bgr, cv2.COLOR_BGR2RGB))
-                try:
-                    session = rembg.new_session('birefnet-portrait')
-                    res_rgba = rembg.remove(pil_char, session=session)
-                except Exception:
+                session = _get_rembg_session()
+                if session is not None:
+                    try:
+                        res_rgba = rembg.remove(pil_char, session=session)
+                    except Exception:
+                        res_rgba = rembg.remove(pil_char)
+                else:
                     res_rgba = rembg.remove(pil_char)
                 rgba = np.array(res_rgba)
                 alpha = (rgba[:, :, 3].astype(np.float32) / 255.0)[:, :, np.newaxis]
                 c_rgb = rgba[:, :, :3]
                 amb_bg = np.full(c_rgb.shape, ambient_bgr[::-1], dtype=np.uint8)
                 char_bgr = cv2.cvtColor((c_rgb * alpha + amb_bg * (1.0 - alpha)).astype(np.uint8), cv2.COLOR_RGB2BGR)
+                del rgba, alpha, c_rgb, amb_bg
             except Exception:
                 pass
+            finally:
+                if pil_char is not None and hasattr(pil_char, "close"):
+                    pil_char.close()
+                if res_rgba is not None and hasattr(res_rgba, "close"):
+                    res_rgba.close()
 
         # 2. Reference Face Analysis
         ref_faces = self._detect_faces_yunet(char_bgr)

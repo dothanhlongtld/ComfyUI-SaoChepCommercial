@@ -186,7 +186,7 @@ class SourceAspectSizingTests(unittest.TestCase):
         original.__iter__.side_effect = lambda: iter([MagicMock(), MagicMock()])
         rendered = MagicMock()
         rendered.shape = (2, 1280, 720, 3)
-        fitted = torch.stack.return_value.to.return_value
+        fitted = torch.empty.return_value
         fitted.shape = (2, 1280, 720, 3)
 
         # Explicit empty-index metadata fits every original to delivery size.
@@ -202,6 +202,7 @@ class SourceAspectSizingTests(unittest.TestCase):
         )
 
         # Mixed routing places generated frames on the fitted originals.
+        fitted.reset_mock()
         result, _ = merger.merge_timeline(
             original,
             rendered,

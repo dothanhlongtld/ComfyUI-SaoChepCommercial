@@ -306,32 +306,82 @@ class SaoChepAdaptiveTimelineMerger:
         # Match the actor delivery canvas without stretching native B-roll.
         h_orig, w_orig = original_images.shape[1], original_images.shape[2]
         h_rend, w_rend = rendered_actor_images.shape[1], rendered_actor_images.shape[2]
+        same_dims = (h_orig, w_orig) == (h_rend, w_rend)
 
-        def fit_originals():
-            frames = []
-            for fr in original_images:
-                fr_np = (fr.detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
-                fr_fit = _contain_pad_frame(fr_np, w_rend, h_rend)
-                frames.append(torch.from_numpy(fr_fit).float() / 255.0)
-            return torch.stack(frames).to(original_images.device)
+        def _fit_frame(fr):
+            fr_np = (fr.detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
+            fr_fit = _contain_pad_frame(fr_np, w_rend, h_rend)
+            return (torch.from_numpy(fr_fit).float() / 255.0).to(
+                dtype=original_images.dtype, device=original_images.device
+            )
 
         if len(actor_indices) == 0:
-            originals = original_images if (h_orig, w_orig) == (h_rend, w_rend) else fit_originals()
+            if same_dims:
+                originals = original_images
+            else:
+                merged = torch.empty(
+                    (total_orig, h_rend, w_rend, original_images.shape[3]),
+                    dtype=original_images.dtype,
+                    device=original_images.device,
+                )
+                for idx in range(total_orig):
+                    merged[idx] = _fit_frame(original_images[idx])
+                originals = merged
             return (originals, "[ON-FLOW TIMELINE MERGER] Empty actor indices, original fitted to delivery canvas.")
 
-        if (h_orig, w_orig) != (h_rend, w_rend):
-            rendered_actor_images = rendered_actor_images.to(original_images.device)
-            merged = fit_originals()
-        else:
+        # Preallocate destination canvas merged once
+        if same_dims:
             merged = original_images.clone()
+        else:
+            merged = torch.empty(
+                (total_orig, h_rend, w_rend, original_images.shape[3]),
+                dtype=original_images.dtype,
+                device=original_images.device,
+            )
 
         rendered_actor_images = rendered_actor_images.to(merged.device)
 
-        # Keep a copy of the spatial-matched (resized) originals for crossfading
-        resized_originals = merged.clone()
+        num_to_place = min(len(actor_indices), rendered_count)
+
+        # Mapping from actor frame timeline index to rendered frame index
+        actor_idx_to_rend = {}
+        for i in range(num_to_place):
+            target_idx = actor_indices[i]
+            if target_idx not in actor_idx_to_rend:
+                actor_idx_to_rend[target_idx] = i
+
+        # Write B-roll frames (frames not in actor_indices) into merged.
+        # When dimensions differ, fit only those non-actor frames via _contain_pad_frame.
+        if not same_dims:
+            for idx in range(total_orig):
+                if idx not in actor_idx_to_rend:
+                    merged[idx] = _fit_frame(original_images[idx])
+
+        # Buffer original frames for transition cut boundaries (at most blend_frames before/after cuts)
+        orig_fitted_boundary = {}
+        if blend_frames > 0 and "shots" in data:
+            for s in data["shots"]:
+                st_f = s.get("start_f", 0)
+                end_f = s.get("end_f", 0)
+                if s.get("type") == "AI_ACTOR":
+                    if st_f > 0 and (st_f + blend_frames) <= total_orig:
+                        for b_i in range(blend_frames):
+                            idx = st_f + b_i
+                            if 0 <= idx < total_orig and idx in actor_idx_to_rend:
+                                if idx not in orig_fitted_boundary:
+                                    orig_fitted_boundary[idx] = (
+                                        original_images[idx] if same_dims else _fit_frame(original_images[idx])
+                                    )
+                    if end_f < total_orig and (end_f - blend_frames) >= 0:
+                        for b_i in range(blend_frames):
+                            idx = end_f - 1 - b_i
+                            if 0 <= idx < total_orig and idx in actor_idx_to_rend:
+                                if idx not in orig_fitted_boundary:
+                                    orig_fitted_boundary[idx] = (
+                                        original_images[idx] if same_dims else _fit_frame(original_images[idx])
+                                    )
 
         # Place rendered actor frames into exact indices
-        num_to_place = min(len(actor_indices), rendered_count)
         for i in range(num_to_place):
             target_idx = actor_indices[i]
             if 0 <= target_idx < merged.shape[0]:
@@ -340,19 +390,18 @@ class SaoChepAdaptiveTimelineMerger:
         # Apply smooth linear alpha cross-fade at shot transition cut boundaries
         if blend_frames > 0 and "shots" in data:
             for s in data["shots"]:
-                st_f = s["start_f"]
-                end_f = s["end_f"]
-                if s["type"] == "AI_ACTOR":
+                st_f = s.get("start_f", 0)
+                end_f = s.get("end_f", 0)
+                if s.get("type") == "AI_ACTOR":
                     # Blend at start of actor shot (if not frame 0)
                     if st_f > 0 and (st_f + blend_frames) <= total_orig:
                         for b_i in range(blend_frames):
                             alpha = (b_i + 1) / float(blend_frames + 1)
                             idx = st_f + b_i
                             if idx < merged.shape[0]:
-                                # blend resized original with rendered
-                                rend_idx = actor_indices.index(idx) if idx in actor_indices else -1
-                                if rend_idx >= 0 and rend_idx < rendered_count:
-                                    merged[idx] = (1.0 - alpha) * resized_originals[idx] + alpha * rendered_actor_images[rend_idx]
+                                rend_idx = actor_idx_to_rend.get(idx, -1)
+                                if 0 <= rend_idx < rendered_count and idx in orig_fitted_boundary:
+                                    merged[idx] = (1.0 - alpha) * orig_fitted_boundary[idx] + alpha * rendered_actor_images[rend_idx]
 
                     # Blend at end of actor shot (if not last frame)
                     if end_f < total_orig and (end_f - blend_frames) >= 0:
@@ -360,9 +409,9 @@ class SaoChepAdaptiveTimelineMerger:
                             alpha = (b_i + 1) / float(blend_frames + 1)
                             idx = end_f - 1 - b_i
                             if idx >= 0 and idx < merged.shape[0]:
-                                rend_idx = actor_indices.index(idx) if idx in actor_indices else -1
-                                if rend_idx >= 0 and rend_idx < rendered_count:
-                                    merged[idx] = (1.0 - alpha) * resized_originals[idx] + alpha * rendered_actor_images[rend_idx]
+                                rend_idx = actor_idx_to_rend.get(idx, -1)
+                                if 0 <= rend_idx < rendered_count and idx in orig_fitted_boundary:
+                                    merged[idx] = (1.0 - alpha) * orig_fitted_boundary[idx] + alpha * rendered_actor_images[rend_idx]
 
         report = (
             f"[ON-FLOW TIMELINE MERGER] Successfully merged {num_to_place} rendered AI frames "
