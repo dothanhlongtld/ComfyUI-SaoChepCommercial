@@ -72,9 +72,49 @@ source-ratio delivery, registration order, and contain-fit geometry. Existing
 ComfyUI tensor checks run only when their local dependencies are available;
 no downloads are performed.
 
+## Bounded-video worker nodes (candidate API v1)
+
+`frame_store.py` and `bounded_video_nodes.py` are the canonical implementation for
+`AWGMemoryGenerate`, `AWGMemoryChroma`, `AWGMemoryResize`, `AWGMemoryClarity`, and
+`AWGMemoryEncode`. AIWorkerGrid uses these provisioned nodes; its notebook does
+not generate another source copy. Ordinary node schema inspection does not
+require the optional SCAIL/KJ/VHS plugins. Execution requires the worker's explicit
+compatibility validation after all external nodes register. Unsupported helpers
+or H.264 format changes fail readiness, without silently reverting to a full-memory
+path. The API version must change if its worker contract changes incompatibly.
+
+The candidate integration initially covers single-character replacement only.
+Generation writes lossless NumPy chunk files under the attempt output directory;
+readers materialize bounded ranges, retaining dtype and frame order. Chroma keeps
+its global sampling/bypass behavior and adaptive OOM batch reduction. Clarity
+keeps global head/tail corrections and original 32-frame adaptive-brightness
+groups, while processing smaller GPU batches. The existing shader's optional
+`scene_luma` argument supports those groups; omission retains existing behavior.
+Resizing and VHS encoding reuse compatible external helpers. The final commercial
+exporter remains authoritative.
+
+Chunk files consume local ephemeral disk and add I/O; disk exhaustion is an error,
+not permission to lower quality. Handles must not be reused after their final
+consumer discards the files. The worker owns interruption, execution-group shutdown,
+and attempt cleanup. Input loading/SAM3 are unchanged, so this is not a guarantee of
+constant total memory, lower cost, or a particular GPU fit.
+
+CPU-only business checks (requires NumPy and pytest, not Torch or model downloads):
+
+```sh
+python -m pytest -q --confcutdir=tests tests/test_bounded_frame_store.py tests/test_frame_store_contract.py tests/test_bounded_video_nodes.py tests/test_bounded_clarity_numeric.py
+```
+
+The numerical tests execute the real shader formulas through a NumPy facade;
+they do not prove PyTorch CUDA reduction/kernel parity. Existing Torch tests remain
+available in a suitable ComfyUI environment. Owner GPU/output acceptance and real
+encoder-shutdown validation remain pending. Publishing these nodes and updating
+live workers require separate authorization; local edits alone do not reach Colab.
+
 ## Adaptive clarity enhancer (Shadow Toe Guard & Chroma Decoupling)
 
 `SaoChepAdaptiveClarityEnhancer` implements:
+
 - **Shadow Toe Guard ($Y < 0.20$)**: Limits luminance drop in dark regions to $< 5\%$ using a smoothstep toe transition curve ($[0.0, 0.20]$), preventing crushed blacks.
 - **Chroma Decoupling ($YC_bC_r$)**: Micro-contrast and sharpening apply strictly to the Luma channel ($Y$), keeping original $C_b, C_r$ chromaticity intact to prevent oversaturation and color burn.
 - **Scene-Adaptive Scaling**: When average scene luminance drops below $0.35$ (low-key scenes), sharpening and clarity strengths automatically scale down to avoid noise amplification.
@@ -90,6 +130,7 @@ no downloads are performed.
 ## Subtitle purge (Zero-Copy On-Flow)
 
 `SaoChepSubtitlePurge` scans the lower bottom zone ($Y \ge 0.75$) for hardcoded subtitles or watermarks:
+
 - Clean video without subtitles: **100% Zero-Copy Bypass** (0ms, 0 pixels altered).
 - Subtitled video: Localized Telea inpainting on detected text glyphs to prevent DiT hallucination.
 

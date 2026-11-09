@@ -100,6 +100,14 @@ class SaoChepSaveReport:
         }
 
 
+# Optional bounded-worker nodes have no eager SCAIL/KJ/VHS dependency imports;
+# their external helpers are bound only by the worker readiness check.
+try:
+    from .bounded_video_nodes import NODE_CLASS_MAPPINGS as _BOUNDED_NODE_CLASS_MAPPINGS
+except Exception:
+    # Do not make normal SaoChep installs depend on optional worker features.
+    _BOUNDED_NODE_CLASS_MAPPINGS = {}
+
 NODE_CLASS_MAPPINGS = {
     "ReferenceChromaLightTest": ReferenceChromaLightTest,
     "SaoChepCommercialExport": SaoChepCommercialExport,
@@ -112,6 +120,8 @@ NODE_CLASS_MAPPINGS = {
     "SaoChepOcularSteering": SaoChepOcularSteering,
 }
 
+NODE_CLASS_MAPPINGS.update(_BOUNDED_NODE_CLASS_MAPPINGS)
+
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ReferenceChromaLightTest": "Reference Chroma Light Test (Color Restore Node 9000)",
     "SaoChepCommercialExport": "SaoChep Commercial Master Export (100% On-Flow Naturalize Master)",
@@ -122,6 +132,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SaoChepShotGeometry": "SaoChep Shot Geometry & Floor Inpaint (On-Flow Preflight Node 9010)",
     "SaoChepSourceAspectSizing": "SaoChep Source Aspect Sizing",
     "SaoChepOcularSteering": "SaoChep Ocular Steering & Anti-Glare (On-Flow Gaze Lock Node 9020)",
+    **{name: name for name in _BOUNDED_NODE_CLASS_MAPPINGS},
 }
 
 # Guarded optional imports for experimental/legacy nodes (Audit V3 Section 13)

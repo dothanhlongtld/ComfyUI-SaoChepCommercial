@@ -68,7 +68,7 @@ class SaoChepAdaptiveClarityEnhancer:
         lut = torch.where(shadow <= pivot, y + (scale_left ** 2) * leftDiff, y + (scale_right ** 2) * rightDiff)
         return torch.clamp(lut, 0.0, 1.0)
 
-    def _process_chunk(self, chunk, tone_lut, adaptive_mode, blend_opacity, sharpen_strength, clarity_strength):
+    def _process_chunk(self, chunk, tone_lut, adaptive_mode, blend_opacity, sharpen_strength, clarity_strength, scene_luma=None):
         # 1. Apply Tone Curve through LUT
         idx = torch.clamp((chunk * 255.0).round().long(), 0, 255)
         layer_tone = tone_lut[idx]
@@ -119,7 +119,10 @@ class SaoChepAdaptiveClarityEnhancer:
 
         if adaptive_mode:
             # Measure global average scene luminance to detect low-key scenes
-            scene_luma = Y_base.mean().item()
+            if scene_luma is None:
+                scene_luma = Y_base.mean().item()
+            elif hasattr(scene_luma, "item"):
+                scene_luma = scene_luma.item()
             if scene_luma < 0.35:
                 # Scale back enhancement on low-key scenes to prevent noise amplification
                 scene_scale = max(0.35, scene_luma / 0.35)
