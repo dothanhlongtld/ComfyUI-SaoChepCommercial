@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, Mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from source_aspect_sizing_node import (
+from source_aspect_sizing_node import (  # noqa: E402 -- test module adds repo root above
     SaoChepSourceAspectSizing,
     delivery_dimensions,
     native_dimensions,
@@ -56,11 +56,11 @@ class SourceAspectSizingTests(unittest.TestCase):
         node = SaoChepSourceAspectSizing()
         self.assertEqual(
             node.size(FakeImageBatch((1, 480, 480, 3)), 576 * 1024, 720),
-            (768, 768, 720, 720),
+            (768, 768, 720, 720, 180, 180),
         )
         self.assertEqual(
             node.size(FakeImageBatch((240, 1440, 2560, 3)), 576 * 1024, 720),
-            (1024, 576, 1280, 720),
+            (1024, 576, 1280, 720, 320, 180),
         )
 
     def test_delivery_short_side_ratio_and_even_dimensions(self):
@@ -74,9 +74,15 @@ class SourceAspectSizingTests(unittest.TestCase):
             ):
                 out_w, out_h = delivery_dimensions(width, height, short)
                 self.assertEqual(min(out_w, out_h), short)
-                self.assertEqual(out_w % 2, 0)
-                self.assertEqual(out_h % 2, 0)
+                self.assertEqual(out_w % 4, 0)
+                self.assertEqual(out_h % 4, 0)
                 self.assertAlmostEqual(out_w / out_h, width / height, delta=0.005)
+
+    def test_delivery_quarter_dimensions_may_be_odd(self):
+        width, height = delivery_dimensions(1772, 1000, 720)
+        self.assertEqual((width, height), (1276, 720))
+        self.assertEqual((width % 4, height % 4), (0, 0))
+        self.assertEqual((width // 4, height // 4), (319, 180))
 
     def test_rejects_invalid_dimensions_budget_and_short_side(self):
         for args in ((0, 10, 100), (10, 0, 100), (10, 10, 0)):

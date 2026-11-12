@@ -49,14 +49,16 @@ labels or copyright/audio matching, and do not establish authentic device proven
 ## Source-aspect sizing and timeline fitting
 
 `SaoChepSourceAspectSizing` accepts a non-empty ComfyUI `IMAGE` batch plus a
-native pixel budget and delivery short side. It returns `native_width`,
-`native_height`, `delivery_width`, and `delivery_height`. Native dimensions
-uniformly scale toward the supplied pixel budget, uniformly scale down if an
-axis would exceed 1280, then round to 32-pixel steps within 256–1280. Extreme
-source ratios are accepted; the minimum native canvas may require downstream
-padding. Delivery keeps the source ratio, fixes the shorter edge to an even
-720 or 1080 pixels, and rounds the longer edge to an even pixel count. Callers
-choose the budget (Lite 576×1024, Pro 640×1152, Pro++ 704×1280) and short side.
+native pixel budget and delivery short side. Outputs 0–3 remain
+`native_width`, `native_height`, `delivery_width`, and `delivery_height`; outputs
+4–5 append `relay_width` and `relay_height` (final dimensions divided by four).
+Native dimensions uniformly scale toward the supplied pixel budget, uniformly
+scale down if an axis would exceed 1280, then round to 32-pixel steps within
+256–1280. Extreme source ratios are accepted; the minimum native canvas may
+require downstream padding. Delivery keeps the source ratio, fixes the shorter
+edge to 720 or 1080 pixels, and rounds the longer edge to the nearest multiple
+of four. This enables resizing to target/4 before RelayVSR. Callers choose the
+budget (Lite 576×1024, Pro 640×1152, Pro++ 704×1280) and short side.
 
 `SaoChepAdaptiveTimelineMerger` contain-fits original B-roll frames to the
 rendered delivery canvas with centered black padding instead of stretching.
@@ -83,6 +85,18 @@ compatibility validation after all external nodes register. Unsupported helpers
 or H.264 format changes fail readiness, without silently reverting to a full-memory
 path. The API version must change if its worker contract changes incompatibly.
 
+`AWGMemoryRelayVSR` is an invocation-owned bounded adapter over the provisioned
+`ComfyUI/relayvsr` source tree; checkpoint dropdowns use ComfyUI's `relayvsr`
+model folder (`models/relayvsr`, `wan.safetensors` and `flash.safetensors`). It
+accepts only `AWG_FRAMES`, streams the ordered sequence continuously through
+Relay's collaborative stream, and writes 4× RGB frames to a new bounded stage.
+Workflow order must resize to final-width/4 × final-height/4 before Relay, then
+apply clarity. The node performs no installs, downloads, or inference CLI calls.
+CPU-mocked tests do not prove real ComfyUI/GPU activation, checkpoint runtime
+compatibility, memory/cancellation behavior, or output quality. Checkpoint
+commercial licensing must be verified by the deployer before activation or
+distribution; weights are not bundled and no license claim is made here.
+
 The candidate integration initially covers single-character replacement only.
 Generation writes lossless NumPy chunk files under the attempt output directory;
 readers materialize bounded ranges, retaining dtype and frame order. Chroma keeps
@@ -102,7 +116,7 @@ constant total memory, lower cost, or a particular GPU fit.
 CPU-only business checks (requires NumPy and pytest, not Torch or model downloads):
 
 ```sh
-python -m pytest -q --confcutdir=tests tests/test_bounded_frame_store.py tests/test_frame_store_contract.py tests/test_bounded_video_nodes.py tests/test_bounded_clarity_numeric.py
+python -m pytest -q --confcutdir=tests tests/test_bounded_frame_store.py tests/test_frame_store_contract.py tests/test_bounded_video_nodes.py tests/test_bounded_clarity_numeric.py tests/test_relayvsr_node.py tests/test_source_aspect_sizing.py
 ```
 
 The numerical tests execute the real shader formulas through a NumPy facade;

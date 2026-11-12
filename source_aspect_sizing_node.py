@@ -22,19 +22,21 @@ def delivery_dimensions(width: int, height: int, short_side: int) -> tuple[int, 
     if short_side <= 0 or short_side % 2:
         raise ValueError("delivery short side must be a positive even integer")
     if width >= height:
-        return max(short_side, round((short_side * width / height) / 2) * 2), short_side
-    return short_side, max(short_side, round((short_side * height / width) / 2) * 2)
+        return max(short_side, round((short_side * width / height) / 4) * 4), short_side
+    return short_side, max(short_side, round((short_side * height / width) / 4) * 4)
 
 
 class SaoChepSourceAspectSizing:
     CATEGORY = "SaoChep/Commercial"
     FUNCTION = "size"
-    RETURN_TYPES = ("INT", "INT", "INT", "INT")
+    RETURN_TYPES = ("INT", "INT", "INT", "INT", "INT", "INT")
     RETURN_NAMES = (
         "native_width",
         "native_height",
         "delivery_width",
         "delivery_height",
+        "relay_width",
+        "relay_height",
     )
 
     @classmethod
@@ -49,12 +51,20 @@ class SaoChepSourceAspectSizing:
 
     def size(
         self, source: Any, native_pixel_budget: int, delivery_short_side: int
-    ) -> tuple[int, int, int, int]:
+    ) -> tuple[int, int, int, int, int, int]:
         shape: tuple[int, ...] = getattr(source, "shape", ())
         if len(shape) != 4 or min(shape) <= 0:
             raise ValueError("source must be a non-empty IMAGE batch [B,H,W,C]")
         height, width = shape[1:3]
+        delivery_width, delivery_height = delivery_dimensions(
+            width, height, delivery_short_side
+        )
+        if delivery_width % 4 or delivery_height % 4:
+            raise ValueError("delivery dimensions must be divisible by four")
         return (
             *native_dimensions(width, height, native_pixel_budget),
-            *delivery_dimensions(width, height, delivery_short_side),
+            delivery_width,
+            delivery_height,
+            delivery_width // 4,
+            delivery_height // 4,
         )

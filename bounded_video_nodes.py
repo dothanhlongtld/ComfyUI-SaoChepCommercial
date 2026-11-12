@@ -27,6 +27,7 @@ from .frame_store import (
     FrameStoreWriter,
     _layout,
 )
+from .relayvsr_node import AWGMemoryRelayVSR
 
 _COMPATIBILITY = {
     "scail.INPUT_TYPES": {
@@ -1133,4 +1134,5 @@ NODE_CLASS_MAPPINGS = {
     "AWGMemoryResize": AWGMemoryResize,
     "AWGMemoryClarity": AWGMemoryClarity,
     "AWGMemoryEncode": AWGMemoryEncode,
+    "AWGMemoryRelayVSR": AWGMemoryRelayVSR,
 }

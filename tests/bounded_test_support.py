@@ -22,7 +22,7 @@ def frames_module():
     sys.modules[package.__name__] = package
     loaded: list[Any] = []
     try:
-        for name in ("frame_store", "bounded_video_nodes"):
+        for name in ("frame_store", "relayvsr_node", "bounded_video_nodes"):
             qualified = f"{package.__name__}.{name}"
             spec = importlib.util.spec_from_file_location(
                 qualified, repository / f"{name}.py"
@@ -32,7 +32,7 @@ def frames_module():
             sys.modules[qualified] = module
             spec.loader.exec_module(module)
             loaded.append(module)
-        store, nodes = loaded
+        store, _relay, nodes = loaded
         nodes.os, nodes.shutil = store.os, store.shutil
         yield nodes
     finally:

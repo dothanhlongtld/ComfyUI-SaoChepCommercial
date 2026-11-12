@@ -122,6 +122,16 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_CLASS_MAPPINGS.update(_BOUNDED_NODE_CLASS_MAPPINGS)
 
+# RelayVSR checkpoints are provisioned separately under ComfyUI/models/relayvsr.
+try:
+    import folder_paths as _folder_paths
+
+    _folder_paths.add_model_folder_path(
+        "relayvsr", str(Path(_folder_paths.base_path) / "models" / "relayvsr")
+    )
+except (ImportError, AttributeError):
+    pass
+
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ReferenceChromaLightTest": "Reference Chroma Light Test (Color Restore Node 9000)",
     "SaoChepCommercialExport": "SaoChep Commercial Master Export (100% On-Flow Naturalize Master)",
