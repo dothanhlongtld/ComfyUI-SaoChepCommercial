@@ -198,3 +198,62 @@ def test_invalid_output_shape_dtype_or_count_preserves_source(
         with pytest.raises(memory.FrameStoreError, match=error):
             memory.AWGMemoryRelayVSR().upscale(source, Model(output))
         assert (source.output_root / source.prefix / source.directory_name).exists()
+
+
+def test_native_x2_scale_and_default_x4_are_backward_compatible(
+    memory, tmp_path, monkeypatch
+):
+    import importlib
+    from types import SimpleNamespace
+
+    import numpy as np
+    from bounded_test_support import make_store
+
+    relay = importlib.import_module("saochep_bounded_under_test.relayvsr_node")
+    _mock_torch(monkeypatch, relay, np)
+    monkeypatch.setattr(relay, "_interrupt", lambda: None)
+    calls = []
+
+    class Engine:
+        geometry = SimpleNamespace(scale=2)
+
+        def restore(self, frames, **kwargs):
+            calls.append(kwargs)
+            for frame in frames:
+                yield np.repeat(np.repeat(frame.transpose(1, 2, 0), 2, 0), 2, 1)
+
+    source, _ = make_store(memory, tmp_path, np.ones((3, 2, 3, 3), dtype=np.float32))
+    result = relay.AWGMemoryRelayVSR().upscale(
+        source, SimpleNamespace(ensure_loaded=lambda: Engine()), sr_ratio=2
+    )[0]
+    assert result.shape == (4, 6, 3)
+    assert len(result) == 3
+    assert calls[0]["sr_ratio"] == 2
+    assert relay.AWGMemoryRelayVSR.INPUT_TYPES()["optional"]["sr_ratio"] == (
+        "INT",
+        {"default": 4, "min": 2, "max": 4, "step": 2},
+    )
+
+
+def test_x2_route_refuses_x4_checkpoints_and_invalid_scales(
+    memory, tmp_path, monkeypatch
+):
+    import importlib
+    from types import SimpleNamespace
+
+    import numpy as np
+    import pytest
+    from bounded_test_support import make_store
+
+    relay = importlib.import_module("saochep_bounded_under_test.relayvsr_node")
+    _mock_torch(monkeypatch, relay, np)
+    monkeypatch.setattr(relay, "_interrupt", lambda: None)
+    engine = SimpleNamespace(geometry=SimpleNamespace(scale=4))
+    model = SimpleNamespace(ensure_loaded=lambda: engine)
+    source, _ = make_store(memory, tmp_path, np.ones((1, 2, 3, 3), dtype=np.uint8))
+    for scale in (True, 0, 3, 8):
+        with pytest.raises(memory.FrameStoreError, match="scale must be"):
+            relay.AWGMemoryRelayVSR().upscale(source, model, sr_ratio=scale)
+    with pytest.raises(memory.FrameStoreError, match="native X2 checkpoints"):
+        relay.AWGMemoryRelayVSR().upscale(source, model, sr_ratio=2)
+    assert len(source.read(0, 1)) == 1

@@ -57,13 +57,10 @@ scale down if an axis would exceed 1280, then round to 32-pixel steps within
 256–1280. Extreme source ratios are accepted; the minimum native canvas may
 require downstream padding. Delivery keeps the source ratio, fixes the shorter
 edge to 720 or 1080 pixels, and rounds the longer edge to the nearest multiple
-of four. This enables resizing to target/4 before RelayVSR. The current AIWorkerGrid
-profiles use the same 589824-pixel native budget with source-aspect dimensions
-aligned to 32 pixels; the node itself remains generic and accepts a caller-supplied
-budget. Current delivery settings use a 720-pixel short side for Lite and 1080
-pixels for Pro and Pro++, with the longer edge rounded to a multiple of four.
-All profiles generate at 24 fps; Lite exports at 24 fps, while Pro and Pro++
-export at 30 fps.
+of four. Outputs 4–5 remain a backward-compatible quarter-delivery sizing helper;
+callers are not required to downsample before RelayVSR. Native generation budgets,
+upscale routing, and final delivery sizes belong to the consuming worker profile.
+The node remains generic and accepts a caller-supplied budget.
 
 `SaoChepAdaptiveTimelineMerger` contain-fits original B-roll frames to the
 rendered delivery canvas with centered black padding instead of stretching.
@@ -94,7 +91,10 @@ must require v2.
 
 `AWGMemoryRelayVSR` accepts `images: AWG_FRAMES` and `model: RELAYVSR_MODEL`
 from the upstream RelayVSR model loader, streams frames through the loader-owned
-engine, and writes 4× RGB frames to a new bounded stage. Provision the upstream
+engine, and writes scaled RGB frames to a new bounded stage. The optional
+`sr_ratio` input accepts 2 or 4 and defaults to 4 for existing workflows. Explicit
+2 requires the loader-owned engine to report native X2 geometry, so original
+4× checkpoints cannot silently substitute for the X2 model. Provision the upstream
 ComfyUI RelayVSR custom node and its model bundle before execution; the loader
 owns model loading, residency, and offload through ComfyUI. This bridge neither
 loads checkpoints itself nor unloads the shared model. Finite float RGB frames
@@ -102,8 +102,8 @@ are clamped to `[0,1]` and rounded to uint8 at the RelayVSR input boundary,
 matching the upstream pixel conversion. This accepts normal bicubic/Lanczos
 resize overshoot without modifying stored source frames; NaN/Infinity and
 unsupported integer pixel types remain errors.
-Workflow order must resize to final-width/4 × final-height/4 before Relay, then
-apply clarity. The node performs no installs, downloads, or inference CLI calls.
+Callers may feed native generated frames directly into Relay, then apply clarity;
+no pre-resize or fixed final delivery size is imposed by this bridge. The node performs no installs, downloads, or inference CLI calls.
 CPU-mocked tests do not prove real ComfyUI/GPU activation, checkpoint runtime
 compatibility, memory/cancellation behavior, or output quality. Checkpoint
 commercial licensing must be verified by the deployer before activation or

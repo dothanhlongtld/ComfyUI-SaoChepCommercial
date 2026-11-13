@@ -57,15 +57,26 @@ class AWGMemoryRelayVSR:
             "required": {
                 "images": ("AWG_FRAMES",),
                 "model": ("RELAYVSR_MODEL",),
-            }
+            },
+            "optional": {
+                "sr_ratio": ("INT", {"default": 4, "min": 2, "max": 4, "step": 2}),
+            },
         }
 
-    def upscale(self, images: FrameStore, model: Any) -> tuple[FrameStore]:
+    def upscale(
+        self, images: FrameStore, model: Any, sr_ratio: int = 4
+    ) -> tuple[FrameStore]:
         if not isinstance(images, FrameStore):
             raise FrameStoreError("RelayVSR requires an AWG frame-store handle.")
         if not callable(getattr(model, "ensure_loaded", None)):
             raise FrameStoreError("Connect the upstream RelayVSR model loader.")
-        output_shape = (images.shape[0] * 4, images.shape[1] * 4, images.shape[2])
+        if type(sr_ratio) is not int or sr_ratio not in (2, 4):
+            raise FrameStoreError("RelayVSR scale must be 2 or 4.")
+        output_shape = (
+            images.shape[0] * sr_ratio,
+            images.shape[1] * sr_ratio,
+            images.shape[2],
+        )
         writer = FrameStoreWriter(
             images.output_root, images.prefix, "relayvsr", images.fps
         )
@@ -76,12 +87,20 @@ class AWGMemoryRelayVSR:
                 torch = importlib.import_module("torch")
                 with torch.inference_mode():
                     engine = model.ensure_loaded()
+                    if (
+                        sr_ratio == 2
+                        and getattr(getattr(engine, "geometry", None), "scale", None)
+                        != 2
+                    ):
+                        raise FrameStoreError(
+                            "RelayVSR 2x requires native X2 checkpoints."
+                        )
                     _interrupt()
                     iterator = _input_frames(images)
                     restore = engine.restore(
                         iterator,
                         seed=42,
-                        sr_ratio=4,
+                        sr_ratio=sr_ratio,
                         chunk_len=16,
                         check=_interrupt,
                     )
@@ -91,7 +110,7 @@ class AWGMemoryRelayVSR:
                         array = np.asarray(output)
                         if array.dtype != np.uint8 or array.shape != output_shape:
                             raise FrameStoreError(
-                                "RelayVSR output must be exact 4x HWC uint8 RGB."
+                                f"RelayVSR output must be exact {sr_ratio}x HWC uint8 RGB."
                             )
                         if np.dtype(images.dtype).kind == "f":
                             array = array.astype(np.float32) / 255.0
