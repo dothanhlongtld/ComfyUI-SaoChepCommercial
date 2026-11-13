@@ -97,7 +97,11 @@ from the upstream RelayVSR model loader, streams frames through the loader-owned
 engine, and writes 4× RGB frames to a new bounded stage. Provision the upstream
 ComfyUI RelayVSR custom node and its model bundle before execution; the loader
 owns model loading, residency, and offload through ComfyUI. This bridge neither
-loads checkpoints itself nor unloads the shared model.
+loads checkpoints itself nor unloads the shared model. Finite float RGB frames
+are clamped to `[0,1]` and rounded to uint8 at the RelayVSR input boundary,
+matching the upstream pixel conversion. This accepts normal bicubic/Lanczos
+resize overshoot without modifying stored source frames; NaN/Infinity and
+unsupported integer pixel types remain errors.
 Workflow order must resize to final-width/4 × final-height/4 before Relay, then
 apply clarity. The node performs no installs, downloads, or inference CLI calls.
 CPU-mocked tests do not prove real ComfyUI/GPU activation, checkpoint runtime

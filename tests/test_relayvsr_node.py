@@ -73,6 +73,53 @@ def test_upstream_handle_streaming_restore_and_ownership(memory, tmp_path, monke
     assert not (source.output_root / source.prefix / source.directory_name).exists()
 
 
+def test_bicubic_float_overshoot_is_clamped_at_uint8_boundary(
+    memory, tmp_path, monkeypatch
+):
+    import importlib
+
+    import numpy as np
+    from bounded_test_support import make_store
+
+    # Observed on the L4 reproduction after bicubic delivery resize:
+    # finite float32 pixels ranged from -0.0337227 to 1.0344917.
+    data = np.array(
+        [[[[-0.0337227, 0.5, 1.0344917], [0.0, 1.0, 0.25]]]], dtype=np.float32
+    )
+    source, _ = make_store(memory, tmp_path, data)
+    relay = importlib.import_module("saochep_bounded_under_test.relayvsr_node")
+    _mock_torch(monkeypatch, relay, np)
+    monkeypatch.setattr(relay, "_interrupt", lambda: None)
+
+    frames = list(relay._input_frames(source))
+    expected = np.array([[[0, 0]], [[128, 255]], [[255, 64]]], dtype=np.uint8)
+    np.testing.assert_array_equal(frames[0], expected)
+    np.testing.assert_array_equal(source.read(0, 1), data)
+
+
+def test_nonfinite_and_nonimage_integer_inputs_remain_rejected(
+    memory, tmp_path, monkeypatch
+):
+    import importlib
+
+    import numpy as np
+    import pytest
+    from bounded_test_support import make_store
+
+    relay = importlib.import_module("saochep_bounded_under_test.relayvsr_node")
+    _mock_torch(monkeypatch, relay, np)
+    monkeypatch.setattr(relay, "_interrupt", lambda: None)
+    for bad in (np.nan, np.inf, -np.inf):
+        source, _ = make_store(
+            memory, tmp_path, np.full((1, 1, 1, 3), bad, dtype=np.float32)
+        )
+        with pytest.raises(memory.FrameStoreError, match="finite float RGB"):
+            list(relay._input_frames(source))
+    source, _ = make_store(memory, tmp_path, np.ones((1, 1, 1, 3), dtype=np.int16))
+    with pytest.raises(memory.FrameStoreError, match="finite float RGB"):
+        list(relay._input_frames(source))
+
+
 def test_interrupt_closes_streams_writer_and_preserves_primary_error(
     memory, tmp_path, monkeypatch
 ):

@@ -30,17 +30,13 @@ def _input_frames(images: FrameStore) -> Iterator[Any]:
                     raise FrameStoreError("RelayVSR accepts RGB frames only.")
                 if frame.dtype == np.uint8:
                     rgb = frame
-                elif (
-                    frame.dtype.kind == "f"
-                    and np.isfinite(frame).all()
-                    and frame.min() >= 0
-                    and frame.max() <= 1
-                ):
-                    rgb = np.rint(frame * 255).clip(0, 255).astype(np.uint8)
+                elif frame.dtype.kind == "f" and np.isfinite(frame).all():
+                    # Bicubic/lanczos IMAGE resize may overshoot [0,1]. Match
+                    # upstream RelayVSR's pixel conversion at this boundary;
+                    # clip before multiplication to avoid float overflow.
+                    rgb = np.rint(frame.clip(0, 1) * 255).astype(np.uint8)
                 else:
-                    raise FrameStoreError(
-                        "Frames must be uint8 or finite float RGB in [0,1]."
-                    )
+                    raise FrameStoreError("Frames must be uint8 or finite float RGB.")
                 yield torch.from_numpy(np.ascontiguousarray(rgb.transpose(2, 0, 1)))
         finally:
             del batch
