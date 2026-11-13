@@ -236,7 +236,7 @@ _H264_FORMAT = {
 # SCAIL helper 2a0d3c0d: SCAIL2AutoVideo._plan/go; Comfy 3c1b7a17 sampler/conditioner/VAE.
 # KJ d7641533: ImageResizeKJv2; VHS 4d907bee: VideoCombine and h264-mp4 format.
 
-BOUNDED_VIDEO_API_VERSION = 1
+BOUNDED_VIDEO_API_VERSION = 2
 
 # Static worker schemas keep ordinary SaoChep node inspection independent of
 # optional SCAIL/KJ/VHS installation and readiness order. External execution

@@ -57,8 +57,13 @@ scale down if an axis would exceed 1280, then round to 32-pixel steps within
 256–1280. Extreme source ratios are accepted; the minimum native canvas may
 require downstream padding. Delivery keeps the source ratio, fixes the shorter
 edge to 720 or 1080 pixels, and rounds the longer edge to the nearest multiple
-of four. This enables resizing to target/4 before RelayVSR. Callers choose the
-budget (Lite 576×1024, Pro 640×1152, Pro++ 704×1280) and short side.
+of four. This enables resizing to target/4 before RelayVSR. The current AIWorkerGrid
+profiles use the same 589824-pixel native budget with source-aspect dimensions
+aligned to 32 pixels; the node itself remains generic and accepts a caller-supplied
+budget. Current delivery settings use a 720-pixel short side for Lite and 1080
+pixels for Pro and Pro++, with the longer edge rounded to a multiple of four.
+All profiles generate at 24 fps; Lite exports at 24 fps, while Pro and Pro++
+export at 30 fps.
 
 `SaoChepAdaptiveTimelineMerger` contain-fits original B-roll frames to the
 rendered delivery canvas with centered black padding instead of stretching.
@@ -74,7 +79,7 @@ source-ratio delivery, registration order, and contain-fit geometry. Existing
 ComfyUI tensor checks run only when their local dependencies are available;
 no downloads are performed.
 
-## Bounded-video worker nodes (candidate API v1)
+## Bounded-video worker nodes (candidate API v2)
 
 `frame_store.py` and `bounded_video_nodes.py` are the canonical implementation for
 `AWGMemoryGenerate`, `AWGMemoryChroma`, `AWGMemoryResize`, `AWGMemoryClarity`, and
@@ -83,13 +88,16 @@ not generate another source copy. Ordinary node schema inspection does not
 require the optional SCAIL/KJ/VHS plugins. Execution requires the worker's explicit
 compatibility validation after all external nodes register. Unsupported helpers
 or H.264 format changes fail readiness, without silently reverting to a full-memory
-path. The API version must change if its worker contract changes incompatibly.
+path. The API version must change if its worker contract changes incompatibly. API v2
+updates the RelayVSR bridge inputs to the upstream `RELAYVSR_MODEL` handle; workers
+must require v2.
 
-`AWGMemoryRelayVSR` is an invocation-owned bounded adapter over the provisioned
-`ComfyUI/relayvsr` source tree; checkpoint dropdowns use ComfyUI's `relayvsr`
-model folder (`models/relayvsr`, `wan.safetensors` and `flash.safetensors`). It
-accepts only `AWG_FRAMES`, streams the ordered sequence continuously through
-Relay's collaborative stream, and writes 4× RGB frames to a new bounded stage.
+`AWGMemoryRelayVSR` accepts `images: AWG_FRAMES` and `model: RELAYVSR_MODEL`
+from the upstream RelayVSR model loader, streams frames through the loader-owned
+engine, and writes 4× RGB frames to a new bounded stage. Provision the upstream
+ComfyUI RelayVSR custom node and its model bundle before execution; the loader
+owns model loading, residency, and offload through ComfyUI. This bridge neither
+loads checkpoints itself nor unloads the shared model.
 Workflow order must resize to final-width/4 × final-height/4 before Relay, then
 apply clarity. The node performs no installs, downloads, or inference CLI calls.
 CPU-mocked tests do not prove real ComfyUI/GPU activation, checkpoint runtime
@@ -97,7 +105,8 @@ compatibility, memory/cancellation behavior, or output quality. Checkpoint
 commercial licensing must be verified by the deployer before activation or
 distribution; weights are not bundled and no license claim is made here.
 
-The candidate integration initially covers single-character replacement only.
+The bounded-video integration now covers all four AIWorkerGrid workflows; it is
+not limited to single-character replacement.
 Generation writes lossless NumPy chunk files under the attempt output directory;
 readers materialize bounded ranges, retaining dtype and frame order. Chroma keeps
 its global sampling/bypass behavior and adaptive OOM batch reduction. Clarity
