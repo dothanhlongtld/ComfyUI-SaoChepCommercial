@@ -164,3 +164,12 @@ live workers require separate authorization; local edits alone do not reach Cola
 ## Dynamic background composite
 
 `SaoChepDynamicBackgroundComposite` composites rendered AI character frames onto original camera background plates using soft-feathered alpha blending (Gaussian blur radius 2–4px) to eliminate edge halos while fully preserving background camera motion, foliage, and traffic dynamics.
+
+## Head-swap nodes
+
+The namespaced `SaoChepHeadSwap*` nodes are maintained in
+[`saochep_headswap/`](saochep_headswap/README.md). See that document for their
+conditioning/frame-fit contracts, canonical external-asset destinations,
+dependency validation, and CPU verification limits. AIWorkerGrid owns workload
+profiles, graph wiring, provisioning, job lifecycle, and final export; no second
+custom-node source tree is embedded in its worker artifact.

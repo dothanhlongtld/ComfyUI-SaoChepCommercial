@@ -122,6 +122,10 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_CLASS_MAPPINGS.update(_BOUNDED_NODE_CLASS_MAPPINGS)
 
+# Collision-safe, namespaced head-swap adapters; no runtime model load at import.
+from .saochep_headswap import NODE_CLASS_MAPPINGS as _HEADSWAP_NODE_CLASS_MAPPINGS
+NODE_CLASS_MAPPINGS.update(_HEADSWAP_NODE_CLASS_MAPPINGS)
+
 # RelayVSR checkpoints are provisioned separately under ComfyUI/models/relayvsr.
 try:
     import folder_paths as _folder_paths
@@ -143,6 +147,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SaoChepSourceAspectSizing": "SaoChep Source Aspect Sizing",
     "SaoChepOcularSteering": "SaoChep Ocular Steering & Anti-Glare (On-Flow Gaze Lock Node 9020)",
     **{name: name for name in _BOUNDED_NODE_CLASS_MAPPINGS},
+    **{name: name.replace("SaoChepHeadSwap", "SaoChep HeadSwap • ")
+       for name in _HEADSWAP_NODE_CLASS_MAPPINGS},
 }
 
 # Guarded optional imports for experimental/legacy nodes (Audit V3 Section 13)

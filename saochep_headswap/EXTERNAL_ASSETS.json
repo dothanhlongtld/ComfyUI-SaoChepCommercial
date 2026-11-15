@@ -1,0 +1,38 @@
+{
+  "custom_nodes/SaoChepCommercial/saochep_headswap/frozen_crop/models/bisenet_face_parsing.onnx": {
+    "bytes": 53199247,
+    "sha256": "95995975429e40f0001b60571c7b3f3ff5d707c07d5a8afc90fdded71c84ff67"
+  },
+  "custom_nodes/SaoChepCommercial/saochep_headswap/frozen_crop/models/yoloface_8n.onnx": {
+    "bytes": 12659761,
+    "sha256": "821cdbb1e65fbbabdde7dd0933f754797a343e56fd962729c61ffcefcd135929"
+  },
+  "custom_nodes/SaoChepCommercial/saochep_headswap/frozen_crop/models/face_detection_yunet_2023mar.onnx": {
+    "bytes": 232589,
+    "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+  },
+  "custom_nodes/SaoChepCommercial/saochep_headswap/frozen_crop/models/face_landmarker.task": {
+    "bytes": 3758596,
+    "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
+  },
+  "custom_nodes/SaoChepCommercial/saochep_headswap/frozen_crop/models/hand_landmarker.task": {
+    "bytes": 7819105,
+    "sha256": "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1"
+  },
+  "custom_nodes/SaoChepCommercial/saochep_headswap/frozen_crop/models/hair.tflite": {
+    "bytes": 781618,
+    "sha256": "2628cf3ce5f695f604cbea2841e00befcaa3624bf80caf3664bef2656d59bf84"
+  },
+  "custom_nodes/SaoChepCommercial/saochep_headswap/frozen_crop/models/multi.tflite": {
+    "bytes": 16371837,
+    "sha256": "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0"
+  },
+  "custom_nodes/SaoChepCommercial/saochep_headswap/frozen_crop/models/birefnet_lite/model.safetensors": {
+    "bytes": 88965896,
+    "sha256": "ce8bcfc045e336322c0424a5863dcfb7e9ce8fed0a5fd4d1b2b20adf12d97243"
+  },
+  "custom_nodes/SaoChepCommercial/saochep_headswap/frozen_crop/models/vitmatte_small/model.safetensors": {
+    "bytes": 103294572,
+    "sha256": "bda9289db1bb6762d978b42d1c62ae3f34daf7497171a347a1d09657efd788cb"
+  }
+}
