@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import patch
@@ -90,10 +91,13 @@ class ExportDeviceProfileTests(unittest.TestCase):
         self.assertIs(inputs["subvisual_sin_jitter"][1]["default"], False)
         self.assertIs(inputs["audio_fingerprint_disrupt"][1]["default"], False)
         self.assertIs(inputs["motion_interpolation"][1]["default"], False)
+        self.assertEqual(inputs["source_attempt_prefix"][0], "STRING")
+        self.assertEqual(inputs["source_attempt_prefix"][1]["default"], "")
         parameters = inspect.signature(export.SaoChepCommercialExport.export_master).parameters
-        self.assertEqual(list(parameters)[-3:], ["filename_prefix", "device_profile_enabled", "motion_interpolation"])
+        self.assertEqual(list(parameters)[-4:], ["filename_prefix", "device_profile_enabled", "motion_interpolation", "source_attempt_prefix"])
         self.assertIs(parameters["device_profile_enabled"].default, True)
         self.assertIs(parameters["motion_interpolation"].default, False)
+        self.assertEqual(parameters["source_attempt_prefix"].default, "")
         export.SaoChepCommercialExport().export_master(
             str(self.source), "iPhone 15 Pro Max", 0.0, False, False,
             "48000", 20, 24, "fast", False, "nested/master",
@@ -245,6 +249,61 @@ class ExportDeviceProfileTests(unittest.TestCase):
             self.invoke(device_profile_enabled=False, filename_prefix="../escape/master")
         self.run.assert_not_called()
         self.unlink.assert_not_called()
+
+
+class AttemptBoundExportTests(unittest.TestCase):
+    def test_bridge_and_exporter_use_legitimate_audio_sibling_inside_attempt(self):
+        from saochep_headswap.export_source_node import SaoChepHeadSwapExportSource
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "output"
+            attempt = root / "jobs" / "attempt-1"
+            attempt.mkdir(parents=True)
+            video = attempt / "clip.mp4"; video.write_bytes(b"source")
+            audio = attempt / "clip-audio.mp4"; audio.write_bytes(b"muxed source")
+            folders = types.SimpleNamespace(get_output_directory=lambda: str(root))
+            with patch.object(export, "folder_paths", folders), patch.dict(sys.modules, {"folder_paths": folders}), \
+                    patch.object(export, "get_ffmpeg_binary", return_value="mock-ffmpeg"), \
+                    patch.object(export.subprocess, "run", side_effect=lambda command, **kwargs: (
+                        Path(command[-1]).write_bytes(b"exported") and types.SimpleNamespace(returncode=0, stderr=""))) as run:
+                handle = SaoChepHeadSwapExportSource().resolve("jobs/attempt-1/clip.mp4", "jobs/attempt-1")[0]
+                self.assertEqual(handle, (True, [str(audio.resolve())]))
+                export.SaoChepCommercialExport().export_master(
+                    handle, output_fps=0, cleanup_intermediate=False, device_profile_enabled=False,
+                    filename_prefix="final/master", source_attempt_prefix="jobs/attempt-1")
+                command = run.call_args.args[0]
+                self.assertEqual(command[command.index("-i") + 1], str(audio.resolve()))
+
+    def test_audio_sibling_symlink_and_prefix_symlink_escape_fail_before_ffmpeg(self):
+        from saochep_headswap.export_source_node import SaoChepHeadSwapExportSource
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "output"
+            attempt = root / "jobs" / "attempt-1"; attempt.mkdir(parents=True)
+            video = attempt / "clip.mp4"; video.write_bytes(b"source")
+            outside = Path(temporary) / "private-audio.mp4"; outside.write_bytes(b"outside")
+            audio_link = attempt / "clip-audio.mp4"
+            prefix_link = root / "linked-attempt"
+            try:
+                audio_link.symlink_to(outside)
+                prefix_link.symlink_to(outside.parent, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("Symlink creation unavailable")
+            folders = types.SimpleNamespace(get_output_directory=lambda: str(root))
+            bridge = SaoChepHeadSwapExportSource()
+            with patch.object(export, "folder_paths", folders), patch.dict(sys.modules, {"folder_paths": folders}), \
+                    patch.object(export.subprocess, "run") as run:
+                with self.assertRaisesRegex(ValueError, "requested attempt"):
+                    bridge.resolve("jobs/attempt-1/clip.mp4", "jobs/attempt-1")
+                with self.assertRaisesRegex(ValueError, "requested attempt"):
+                    bridge.resolve("linked-attempt/private-audio.mp4", "linked-attempt")
+                with self.assertRaisesRegex(ValueError, "source attempt"):
+                    export.SaoChepCommercialExport().export_master(
+                        (True, [str(video)]), device_profile_enabled=False, cleanup_intermediate=False,
+                        source_attempt_prefix="jobs/attempt-1")
+                with self.assertRaisesRegex(ValueError, "source attempt"):
+                    export.SaoChepCommercialExport().export_master(
+                        (True, [str(prefix_link / "private-audio.mp4")]), device_profile_enabled=False, cleanup_intermediate=False,
+                        source_attempt_prefix="linked-attempt")
+                run.assert_not_called()
 
 
 if __name__ == "__main__":

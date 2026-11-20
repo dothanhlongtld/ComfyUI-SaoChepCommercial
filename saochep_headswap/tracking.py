@@ -14,6 +14,18 @@ def continuity(previous, current):
     return movement/max(previous[2:4]) + np.abs(np.log(current[2:4]/previous[2:4])).sum()
 
 
+def preserve_confirmed_gaps(faces, max_gap):
+    """Validate short gaps by their observed endpoints without fabricating faces.
+
+    Returned missing positions remain None so callers must use independently
+    confirmed SAM ownership for masks in those frames.
+    """
+    result, repaired = repair_gaps(faces, max_gap)
+    for index in repaired:
+        result[index] = None
+    return result, repaired
+
+
 def repair_gaps(faces, max_gap):
     result = list(faces)
     repaired = []
@@ -30,7 +42,7 @@ def repair_gaps(faces, max_gap):
             raise ValueError(f'Face tracking unavailable at frames {start}..{index-1}')
         before, after = result[start-1], result[index]
         if not plausible(before, after):
-            raise ValueError(f'Unconfirmed identity across tracking gap at {start}')
+            raise ValueError(f'Unconfirmed identity across tracking gap at frames {start}..{index-1}')
         for offset in range(length):
             fraction = (offset+1)/(length+1)
             result[start+offset] = before*(1-fraction)+after*fraction

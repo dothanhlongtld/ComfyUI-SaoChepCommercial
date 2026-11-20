@@ -942,9 +942,23 @@ class AWGMemoryClarity(_StoreNode):
     _source = "clarity"
     FUNCTION = "enhance"
 
-    def enhance(self, images: FrameStore, **settings: Any) -> tuple[FrameStore]:
+    @classmethod
+    def INPUT_TYPES(cls) -> dict[str, Any]:
+        schema = super().INPUT_TYPES()
+        schema["optional"]["preserve_frame_count"] = ("BOOLEAN", {"default": False})
+        return schema
+
+    def enhance(
+        self, images: FrameStore, preserve_frame_count: bool = False, **settings: Any
+    ) -> tuple[FrameStore]:
+        if type(preserve_frame_count) is not bool:
+            raise TypeError("preserve_frame_count must be a boolean.")
         torch = _torch()
-        crop = 1 if len(images) % 4 == 1 and len(images) > 16 else 0
+        crop = (
+            0
+            if preserve_frame_count
+            else (1 if len(images) % 4 == 1 and len(images) > 16 else 0)
+        )
         means = _frame_means(images, crop)
         plan = _head_plan(means)
         # Preserve head correction before computing tail statistics. Clipping may

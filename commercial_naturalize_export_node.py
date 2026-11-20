@@ -17,6 +17,14 @@ import datetime
 import subprocess
 from pathlib import Path
 
+def _resolve_attempt_mp4(video, attempt_prefix, output_root):
+    try:
+        from .saochep_headswap.export_source_node import resolve_attempt_mp4
+    except (ImportError, ValueError):
+        from saochep_headswap.export_source_node import resolve_attempt_mp4
+    return resolve_attempt_mp4(str(video), attempt_prefix, output_root)
+
+
 def get_ffmpeg_binary():
     bin_p = shutil.which("ffmpeg")
     if bin_p:
@@ -136,6 +144,7 @@ class SaoChepCommercialExport:
                 "filename_prefix": ("STRING", {"default": "saochep/master"}),
                 "device_profile_enabled": ("BOOLEAN", {"default": True, "tooltip": "Inject synthetic device metadata; source metadata/chapter stripping remains enabled when off"}),
                 "motion_interpolation": ("BOOLEAN", {"default": False, "tooltip": "Apply FFmpeg optical flow motion interpolation (minterpolate) for smooth 24fps -> 30fps conversion"}),
+                "source_attempt_prefix": ("STRING", {"default": "", "tooltip": "Optional output-root-relative attempt subtree; required for worker-managed exports"}),
             }
         }
 
@@ -144,10 +153,12 @@ class SaoChepCommercialExport:
                       audio_sample_rate="48000", crf=18,
                       output_fps=30, preset="medium", cleanup_intermediate=True,
                       filename_prefix="saochep/master", device_profile_enabled=True,
-                      motion_interpolation=False):
+                      motion_interpolation=False, source_attempt_prefix=""):
         
         raw_video_path = find_mp4_path(filenames)
         if not raw_video_path:
+            if source_attempt_prefix != "":
+                raise ValueError("Invalid source attempt input")
             raise RuntimeError(f"[SaoChepCommercialExport ERROR] Cannot locate valid input video in: {filenames}")
 
         raw_video = Path(raw_video_path)
@@ -155,12 +166,18 @@ class SaoChepCommercialExport:
         if '-audio' not in raw_video.stem.lower():
             audio_sibling = raw_video.parent / f"{raw_video.stem}-audio{raw_video.suffix}"
             if audio_sibling.exists():
-                print(f"[SaoChepCommercialExport] Auto-switched to audio sibling: {audio_sibling.name}")
+                if source_attempt_prefix == "":
+                    print(f"[SaoChepCommercialExport] Auto-switched to audio sibling: {audio_sibling.name}")
                 raw_video = audio_sibling
         if folder_paths is not None:
             output_dir = Path(folder_paths.get_output_directory())
         else:
             output_dir = Path("./output")
+        if source_attempt_prefix != "":
+            try:
+                raw_video = _resolve_attempt_mp4(raw_video, source_attempt_prefix, output_dir)
+            except Exception:
+                raise ValueError("Invalid source attempt input") from None
 
         # Determine output path based on filename_prefix
         clean_prefix = filename_prefix.replace("\\", "/").strip("/")

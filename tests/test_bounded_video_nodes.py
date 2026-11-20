@@ -264,6 +264,41 @@ def test_clarity_uses_lower_median(memory):
     )  # Lower middle of six, not average.
 
 
+@pytest.mark.parametrize("count", [5, 16, 17, 25])
+def test_clarity_preserve_frame_count_retains_order_and_schema(memory, tmp_path, count):
+    frames = np.arange(count * 2 * 3 * 3, dtype=np.float32).reshape(count, 2, 3, 3)
+    source, _ = make_store(memory, tmp_path, frames)
+
+    class Clarity:
+        def build_tone_lut_tensor(self, device):
+            return "lut"
+
+        def _process_chunk(self, batch, lut, *settings, scene_luma=None):
+            assert settings == (True, 0.31, 1.0, 0.4)
+            return batch
+
+    memory._BINDINGS["clarity"] = Clarity
+    memory._head_plan = lambda _means: None
+    memory._tail_plan = lambda _means: None
+    result = memory.AWGMemoryClarity().enhance(source, preserve_frame_count=True)[0]
+    np.testing.assert_array_equal(all_pixels(result), frames)
+    assert len(result) == count
+    if count == 25:
+        legacy_source, _ = make_store(memory, tmp_path, frames)
+        legacy = memory.AWGMemoryClarity().enhance(legacy_source)[0]
+        np.testing.assert_array_equal(all_pixels(legacy), frames[1:])
+        assert len(legacy) == 24
+    schema = memory.AWGMemoryClarity.INPUT_TYPES()
+    assert schema["optional"]["preserve_frame_count"] == ("BOOLEAN", {"default": False})
+
+
+@pytest.mark.parametrize("value", ["true", 1, None])
+def test_clarity_preserve_frame_count_requires_boolean(memory, tmp_path, value):
+    source, _ = make_store(memory, tmp_path, np.zeros((5, 2, 3, 3), dtype=np.float32))
+    with pytest.raises(TypeError, match="must be a boolean"):
+        memory.AWGMemoryClarity().enhance(source, preserve_frame_count=value)
+
+
 @pytest.mark.parametrize("count", [1, 24, 29, 30, 60, 85, 120])
 def test_clarity_boundary_head_then_recomputed_means_and_bounded_lut(
     memory, tmp_path, monkeypatch, count
