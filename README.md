@@ -93,9 +93,12 @@ must require v2.
 from the upstream RelayVSR model loader, streams frames through the loader-owned
 engine, and writes scaled RGB frames to a new bounded stage. The optional
 `sr_ratio` input accepts 2 or 4 and defaults to 4 for existing workflows. Explicit
-2 requires the loader-owned engine to report native X2 geometry, so original
-4× checkpoints cannot silently substitute for the X2 model. Provision the upstream
-ComfyUI RelayVSR custom node and its model bundle before execution; the loader
+2 normally requires native X2 geometry; optional `allow_x4_downsample` (BOOLEAN,
+default `False`) opts into requesting ratio 2 from native X4 checkpoints. The pinned
+engine crops and downsamples each frame with antialiased bicubic before returning
+it to the CPU; the bridge does not resize again. A ratio of 2 rejects missing or
+unknown checkpoint geometry. Provision the upstream ComfyUI RelayVSR custom node
+and its model bundle before execution; the loader
 owns model loading, residency, and offload through ComfyUI. This bridge neither
 loads checkpoints itself nor unloads the shared model. Finite float RGB frames
 are clamped to `[0,1]` and rounded to uint8 at the RelayVSR input boundary,

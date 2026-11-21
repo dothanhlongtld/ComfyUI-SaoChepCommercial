@@ -25,6 +25,10 @@ def _mock_torch(monkeypatch, relay, np):
 
 def test_relay_schema_and_registration(memory):
     node = memory.NODE_CLASS_MAPPINGS["AWGMemoryRelayVSR"]
+    assert node.INPUT_TYPES()["optional"]["allow_x4_downsample"] == (
+        "BOOLEAN",
+        {"default": False},
+    )
     assert node.INPUT_TYPES()["required"] == {
         "images": ("AWG_FRAMES",),
         "model": ("RELAYVSR_MODEL",),
@@ -233,6 +237,68 @@ def test_native_x2_scale_and_default_x4_are_backward_compatible(
         "INT",
         {"default": 4, "min": 2, "max": 4, "step": 2},
     )
+
+
+def test_x4_downsample_requires_opt_in_and_preserves_requested_ratio(
+    memory, tmp_path, monkeypatch
+):
+    import importlib
+    from types import SimpleNamespace
+
+    import numpy as np
+    import pytest
+    from bounded_test_support import make_store
+
+    relay = importlib.import_module("saochep_bounded_under_test.relayvsr_node")
+    _mock_torch(monkeypatch, relay, np)
+    monkeypatch.setattr(relay, "_interrupt", lambda: None)
+    calls = []
+
+    class Engine:
+        geometry = SimpleNamespace(scale=4)
+
+        def restore(self, frames, **kwargs):
+            calls.append(kwargs)
+            for frame in frames:
+                yield np.repeat(np.repeat(frame.transpose(1, 2, 0), 2, 0), 2, 1)
+
+    model = SimpleNamespace(ensure_loaded=lambda: Engine())
+    source, _ = make_store(memory, tmp_path, np.ones((2, 2, 3, 3), dtype=np.uint8))
+    with pytest.raises(memory.FrameStoreError, match="native X2"):
+        relay.AWGMemoryRelayVSR().upscale(source, model, sr_ratio=2)
+    assert (source.output_root / source.prefix / source.directory_name).exists()
+
+    result = relay.AWGMemoryRelayVSR().upscale(
+        source, model, sr_ratio=2, allow_x4_downsample=True
+    )[0]
+    assert result.shape == (4, 6, 3)
+    assert len(result) == 2
+    assert calls[0]["sr_ratio"] == 2
+
+
+def test_unknown_native_geometry_is_rejected(memory, tmp_path, monkeypatch):
+    import importlib
+    from types import SimpleNamespace
+
+    import numpy as np
+    import pytest
+    from bounded_test_support import make_store
+
+    relay = importlib.import_module("saochep_bounded_under_test.relayvsr_node")
+    _mock_torch(monkeypatch, relay, np)
+    monkeypatch.setattr(relay, "_interrupt", lambda: None)
+    for geometry in (None, SimpleNamespace(scale=3)):
+        source, _ = make_store(memory, tmp_path, np.ones((1, 2, 3, 3), dtype=np.uint8))
+        model = SimpleNamespace(
+            ensure_loaded=lambda geometry=geometry: SimpleNamespace(geometry=geometry)
+        )
+        with pytest.raises(
+            memory.FrameStoreError, match="native X2 checkpoints or opt-in"
+        ):
+            relay.AWGMemoryRelayVSR().upscale(
+                source, model, sr_ratio=2, allow_x4_downsample=True
+            )
+        assert (source.output_root / source.prefix / source.directory_name).exists()
 
 
 def test_x2_route_refuses_x4_checkpoints_and_invalid_scales(

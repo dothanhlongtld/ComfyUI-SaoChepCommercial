@@ -60,11 +60,16 @@ class AWGMemoryRelayVSR:
             },
             "optional": {
                 "sr_ratio": ("INT", {"default": 4, "min": 2, "max": 4, "step": 2}),
+                "allow_x4_downsample": ("BOOLEAN", {"default": False}),
             },
         }
 
     def upscale(
-        self, images: FrameStore, model: Any, sr_ratio: int = 4
+        self,
+        images: FrameStore,
+        model: Any,
+        sr_ratio: int = 4,
+        allow_x4_downsample: bool = False,
     ) -> tuple[FrameStore]:
         if not isinstance(images, FrameStore):
             raise FrameStoreError("RelayVSR requires an AWG frame-store handle.")
@@ -87,13 +92,15 @@ class AWGMemoryRelayVSR:
                 torch = importlib.import_module("torch")
                 with torch.inference_mode():
                     engine = model.ensure_loaded()
-                    if (
-                        sr_ratio == 2
-                        and getattr(getattr(engine, "geometry", None), "scale", None)
-                        != 2
+                    native_scale = getattr(
+                        getattr(engine, "geometry", None), "scale", None
+                    )
+                    if sr_ratio == 2 and not (
+                        native_scale == 2
+                        or (native_scale == 4 and allow_x4_downsample is True)
                     ):
                         raise FrameStoreError(
-                            "RelayVSR 2x requires native X2 checkpoints."
+                            "RelayVSR 2x requires native X2 checkpoints or opt-in with native X4 checkpoints."
                         )
                     _interrupt()
                     iterator = _input_frames(images)
