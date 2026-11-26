@@ -27,6 +27,12 @@ from .frame_store import (
     FrameStoreWriter,
     _layout,
 )
+from .native_anchor_nodes import (
+    ANCHOR_COUNT,
+    AWGLoadNativeAnchor,
+    AWGOwnNativeFrames,
+    AWGSliceHeadSwapConditioning,
+)
 from .relayvsr_node import AWGMemoryRelayVSR
 
 _COMPATIBILITY = {
@@ -553,6 +559,14 @@ class AWGMemoryGenerate(_StoreNode):
         return schema
 
     def generate(self, attempt_prefix: str, **inputs: Any) -> tuple[FrameStore]:
+        return self._generate(attempt_prefix, inputs)
+
+    def _generate(
+        self,
+        attempt_prefix: str,
+        inputs: Mapping[str, Any],
+        continuation: tuple[int, int] | None = None,
+    ) -> tuple[FrameStore]:
         frames = (
             max(1, int(inputs["frames"]))
             if inputs["frames"] > 0
@@ -571,6 +585,18 @@ class AWGMemoryGenerate(_StoreNode):
         pose_len = pose.shape[0] if pose is not None else frames
         previous = inputs.get("anchor_frames")
         anchored = previous is not None and previous.shape[0] > 0
+        if continuation is not None:
+            owned, context = continuation
+            mask = inputs.get("pose_video_mask")
+            if (
+                not (0 < owned <= frames <= owned + 3 or (not anchored and (owned, frames) == (1, 5)))
+                or pc != ANCHOR_COUNT or length != 85
+                or context != frames + (pc if anchored else 0)
+                or pose is None or pose_len != context or (context - 1) % 4
+                or mask is None or mask.shape != pose.shape
+                or (anchored and previous.shape[0] != pc)
+            ):
+                raise FrameStoreError("Invalid SCAIL anchor conditioning window.")
         if not anchored:
             previous = None
         elif previous is not None and previous.shape[0] > pc:
@@ -627,6 +653,11 @@ class AWGMemoryGenerate(_StoreNode):
                 if hasattr(sampled, "result"):
                     sampled = sampled.result
                 decoded = _binding("decode")().decode(inputs["vae"], sampled[0])[0]
+                if continuation is not None:
+                    if index + 1 < len(plan) and decoded.shape[0] != chunk_length:
+                        raise FrameStoreError("SCAIL intermediate decode did not match its planned length.")
+                    if decoded.shape[0] > chunk_length:
+                        raise FrameStoreError("SCAIL final decode exceeds its planned length.")
                 if had_previous and decoded.shape[0] > 0:
                     decoded = decoded[min(pc, decoded.shape[0]) :]
                 # The upstream conditioner uses only this tail. clone() releases
@@ -645,6 +676,8 @@ class AWGMemoryGenerate(_StoreNode):
                 raise FrameStoreError(
                     "SCAIL produced no frames for the requested segment plan."
                 )
+            if continuation is not None and written < continuation[0]:
+                raise FrameStoreError("SCAIL did not decode every owned frame.")
             while written < frames:
                 _interrupt()
                 count = min(
@@ -656,6 +689,23 @@ class AWGMemoryGenerate(_StoreNode):
                 writer.append(np.repeat(last, count, axis=0), check=_interrupt)
                 written += count
             return (writer.finish(),)
+
+
+class AWGAnchoredGenerate(AWGMemoryGenerate):
+    """Bounded generation that distinguishes owned frames from alignment."""
+
+    NATIVE_ANCHOR_API_VERSION = 1
+
+    @classmethod
+    def INPUT_TYPES(cls) -> dict[str, Any]:
+        schema = super().INPUT_TYPES()
+        schema["required"].update(owned_frames=("INT",), context_frames=("INT",))
+        return schema
+
+    def generate(self, attempt_prefix: str, **inputs: Any) -> tuple[FrameStore]:
+        owned = inputs.pop("owned_frames")
+        context = inputs.pop("context_frames")
+        return self._generate(attempt_prefix, inputs, (owned, context))
 
 
 def _chroma_offsets(
@@ -1144,6 +1194,10 @@ class AWGMemoryEncode(_StoreNode):
 
 NODE_CLASS_MAPPINGS = {
     "AWGMemoryGenerate": AWGMemoryGenerate,
+    "AWGAnchoredGenerate": AWGAnchoredGenerate,
+    "AWGOwnNativeFrames": AWGOwnNativeFrames,
+    "AWGLoadNativeAnchor": AWGLoadNativeAnchor,
+    "AWGSliceHeadSwapConditioning": AWGSliceHeadSwapConditioning,
     "AWGMemoryChroma": AWGMemoryChroma,
     "AWGMemoryResize": AWGMemoryResize,
     "AWGMemoryClarity": AWGMemoryClarity,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 import math
+import sys
 import types
 from typing import Any
 from unittest.mock import Mock
@@ -463,6 +464,54 @@ def test_helper_compatibility_rejects_signature_or_behavior_changes(memory):
             "helper", verified_helper, {**expected, "parameters": ["different"]}
         )
 
+
+
+@pytest.mark.parametrize("decode_lengths, failure", [
+    ((84, 9), "intermediate decode"),
+    ((85, 6), None),
+    ((85, 5), "did not decode every owned frame"),
+    ((85, 10), "final decode exceeds"),
+])
+def test_anchored_generator_rejects_shifted_ownership_but_allows_final_alignment(
+    memory, tmp_path, monkeypatch, decode_lengths, failure
+):
+    plan = [(0, 85), (85, 9)]
+    observed = []
+
+    class Decode:
+        def decode(self, _vae, planned_offset):
+            count = decode_lengths[len(observed)]
+            observed.append(count)
+            # Use the plan's coordinates, not the number of frames surviving decode.
+            values = np.arange(planned_offset, planned_offset + count, dtype=np.float32)
+            return (TensorDouble(np.broadcast_to(values[:, None, None, None], (count, 1, 1, 3)).copy()),)
+
+    memory._BINDINGS.update(
+        scail=types.SimpleNamespace(_plan=lambda *_: plan),
+        condition=types.SimpleNamespace(execute=lambda *a, **kw: (None, None, a[10] - (5 if kw["previous_frames"] is not None else 0))),
+        sampler=types.SimpleNamespace(execute=lambda *a: (a[-1],)),
+        decode=Decode,
+    )
+    monkeypatch.setitem(sys.modules, "folder_paths", types.SimpleNamespace(get_output_directory=lambda: str(tmp_path)))
+    conditioning = TensorDouble(np.zeros((89, 1, 1, 3), dtype=np.float32))
+    inputs = dict.fromkeys(("positive", "negative", "vae", "reference_image", "model", "clip_vision_output", "sampler", "sigmas"))
+    inputs.update(frames=89, width=1, height=1, pose_video=conditioning, pose_video_mask=conditioning,
+                  length=85, previous_frame_count=5, seed=42, cfg=1, replacement_mode=True)
+    node = memory.AWGAnchoredGenerate()
+    if failure:
+        with pytest.raises(memory.FrameStoreError, match=failure):
+            node.generate(PREFIX, owned_frames=86, context_frames=89, **inputs)
+        assert observed == ([84] if decode_lengths[0] == 84 else list(decode_lengths))
+        if decode_lengths[0] == 84:
+            # The legacy path deliberately keeps its prior behavior.
+            observed.clear()
+            (legacy,) = memory.AWGMemoryGenerate().generate(PREFIX, **inputs)
+            assert len(legacy) == 89
+            legacy.discard()
+    else:
+        (store,) = node.generate(PREFIX, owned_frames=86, context_frames=89, **inputs)
+        np.testing.assert_array_equal(all_pixels(store)[:86, 0, 0, 0], np.arange(86))
+        store.discard()
 
 def test_cached_file_handles_are_never_reused(memory):
     for node in memory.NODE_CLASS_MAPPINGS.values():
